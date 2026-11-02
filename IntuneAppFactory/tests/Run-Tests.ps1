@@ -156,6 +156,21 @@ try {
         $null = [Management.Automation.Language.Parser]::ParseFile($entry, [ref]$parseTokens, [ref]$parseErrors)
         Assert-True (-not $parseErrors) 'Generated syntax is invalid.'
     }
+    foreach ($allowDefer in @($true, $false)) {
+        Test-Case "AllowDefer renders only the configured Boolean ($allowDefer)" {
+            . "$projectRoot/scripts/Update-DeploymentTemplate.ps1"
+            $source = Join-Path (Split-Path $projectRoot -Parent) 'sources/PSAppDeployToolkit_Template_v4/Invoke-AppDeployToolkit.ps1'
+            $entry = Join-Path $sandbox 'AllowDefer.ps1'
+            Copy-Item -LiteralPath $source -Destination $entry
+            $config = New-TestConfig
+            $config.psadt.allowDefer = $allowDefer
+            $config.psadt.deferTimes = 7
+            Update-FactoryDeploymentTemplate -Path $entry -Config $config
+            $lines = @(Get-Content $entry | Where-Object { $_ -match '^\s*AllowDefer\s*=' })
+            $expected = if ($allowDefer) { 'AllowDefer = $true' } else { 'AllowDefer = $false' }
+            Assert-True ($lines.Count -eq 1 -and $lines[0].Trim() -ceq $expected) "Expected exactly '$expected' without an added expression."
+        }
+    }
     Test-Case 'Builder uses original template and creates a standalone package without packaging tools' {
         $script:fixtureRoot = Join-Path $sandbox 'Factory'
         New-Item -ItemType Directory -Path "$fixtureRoot/apps/Fixture/26.05/installers","$sandbox/sources" -Force | Out-Null
@@ -266,8 +281,12 @@ try {
             $state = Invoke-DeploymentProbe $detached @{DeploymentType=$action}
             Assert-True ($state.Welcome.Count -eq 1 -and $state.Welcome[0].CloseProcessesCountdown -eq 123 -and -not $state.Welcome[0].AllowDefer) 'Uninstall/repair must close configured processes without deferrals.'
         }
-        $state = Invoke-DeploymentProbe $detached @{DeployMode='Silent';SuppressRebootPassThru=$false;TerminalServerMode=$false;DisableLogging=$false}
-        Assert-True ($state.Opened.DeployMode -eq 'Silent' -and -not $state.Welcome[0].AllowDefer -and -not $state.Opened.SuppressRebootPassThru -and -not $state.Opened.TerminalServerMode -and -not $state.Opened.DisableLogging) 'Explicit CLI overrides were ignored.'
+        foreach ($mode in @('Silent','NonInteractive')) {
+            $state = Invoke-DeploymentProbe $detached @{DeployMode=$mode;SuppressRebootPassThru=$false;TerminalServerMode=$false;DisableLogging=$false}
+            Assert-True ($state.Opened.DeployMode -eq $mode -and -not $state.Opened.SuppressRebootPassThru -and -not $state.Opened.TerminalServerMode -and -not $state.Opened.DisableLogging) 'Explicit CLI overrides were ignored.'
+            # The probe records arguments; PSADT itself suppresses deferral UI in these modes.
+            Assert-True ($state.Welcome[0].AllowDefer) 'Configured AllowDefer must be passed unchanged to PSADT regardless of deployment mode.'
+        }
     }
     Test-Case 'Arguments stay literal and MSI repair and installed EXE selectors work' {
         . "$projectRoot/scripts/Update-DeploymentTemplate.ps1"

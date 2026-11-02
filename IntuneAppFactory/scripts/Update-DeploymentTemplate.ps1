@@ -75,7 +75,7 @@ function Update-FactoryDeploymentTemplate {
         Add-TemplateEdit ([regex]::Escape($marker)) $text
     }
     # Keep the upstream welcome blocks and comments, changing only their settings.
-    Add-TemplateEdit '(?m)^        AllowDefer = \$true' ('        AllowDefer = (' + (ConvertTo-FactoryPowerShellLiteral $options.allowDefer) + ' -and $adtSession.DeployMode -eq ''Interactive'')')
+    Add-TemplateEdit '(?m)^        AllowDefer = \$true' ('        AllowDefer = ' + (ConvertTo-FactoryPowerShellLiteral $options.allowDefer))
     foreach ($setting in @('DeferTimes','CheckDiskSpace','PersistPrompt')) {
         Add-TemplateEdit ("(?m)^        $setting = [^\r\n]+") ("        $setting = " + (ConvertTo-FactoryPowerShellLiteral $options.$setting))
     }
