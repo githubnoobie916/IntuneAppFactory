@@ -1,6 +1,6 @@
 # IntuneAppFactory
 
-Generate a standalone PSAppDeployToolkit 4.1.8 package from explicit application JSON, review the generated script, then create an `.intunewin` file with a separate command.
+Generate a standalone PSAppDeployToolkit 4.1.8 package from explicit application JSON, review the generated script, create an `.intunewin` file, then optionally publish it with a separate upload command.
 
 Every generation starts with `../sources/PSAppDeployToolkit_Template_v4`. That source is read-only. Only the copied `Invoke-AppDeployToolkit.ps1` is populated; the toolkit, resources, original functions, phase markers, comments, imports, logging, and error handling are retained. The generated script contains ordinary PSADT calls and does not load factory helpers or parse JSON at deployment time.
 
@@ -23,6 +23,8 @@ Run these commands from `IntuneAppFactory` in PowerShell on Windows. PowerShell 
 
 Generation never executes an installer, downloads files, creates `.intunewin`, or publishes to Intune. Packaging does not regenerate the deployment. An absolute path to either script also works from another working directory.
 
+For the separate upload stage, see [UPLOADING.md](UPLOADING.md). `Upload-IntuneWin.ps1` reads a current revision's metadata and existing archive, supports offline `-Preview` / `-WhatIf`, and uses Microsoft Graph to create and upload a new Win32 app. Group assignment is optional and explicit. Uploading requires PowerShell 7.2 or later; existing generation and packaging retain their Windows PowerShell 5.1 support.
+
 `Build-App.ps1 -Force` explicitly regenerates an existing recognized revision, replacing manual edits and any artifacts inside that revision. A failed generation preserves the previous revision. Without `-Force`, an existing revision is an error. `-Revision` overrides the JSON revision in the output snapshot without changing the source JSON.
 
 `New-IntuneWin.ps1 -Force` replaces an existing archive only after successful packaging and verification. Use it after changing a reviewed package. The package folder remains untouched.
@@ -43,6 +45,8 @@ Intune_App_Packaging/
       New-IntuneWin.ps1                    # separately package a reviewed folder
       IntuneWin.ps1                       # packaging checks and tool invocation
       Install-IntuneWinTool.ps1            # explicit one-time tool setup
+      Upload-IntuneWin.ps1                 # preview or publish a generated revision
+      IntuneUpload.ps1                     # Graph, metadata, and streaming upload helpers
     tests/
     tools/
     output/<AppId>/<Version>/rev-<Revision>/
@@ -151,7 +155,7 @@ All fields must be present: `displayName`, `description`, `installContext`, `det
 - `icon`: PNG path relative to `apps/<AppId>/`, or `""` for no publishing icon. A configured file must exist at build time. PSADT UI assets remain separate.
 - `detection`: `null` for no detection metadata, or an object with one of these exact field sets: MSI (`type`, `productCode`); file (`type`, `path`, `file`, `version`); registry (`type`, `key`, `valueName`, `value`). Registry value name/value may be empty strings.
 
-This metadata is recorded for publishing; the factory does not upload apps, create assignments, or implement Intune detection rules. The 7-Zip example's detection still needs validation against the approved installer.
+This metadata is recorded for publishing. The separate uploader maps it to Intune detection rules and can optionally assign the published app to one group. The 7-Zip example's detection still needs validation against the approved installer; preview validates its shape, not its behavior on a device.
 
 ## Separate packaging
 
@@ -181,6 +185,8 @@ Builds use staging and a revision lock, preserving previous output if generation
 .\tests\Run-Tests.ps1
 .\tests\Run-Tests.ps1 -WithRealTool
 .\tests\Run-IntuneWinTests.ps1 -WithRealTool
+# PowerShell 7.2+; mocked network, no tenant changes:
+.\tests\Run-UploadTests.ps1
 ```
 
 Generation tests use isolated copies and inert payloads. Generated deployment scripts are exercised with toolkit import, session, installer, process-closing, and UI boundaries mocked. Real-tool tests run Microsoft's packaging utility, never an application installer or the PSADT launcher. Tests cover configuration omissions, literal arguments, native command compatibility, detached deployment, source preservation, revision isolation, failed-build recovery, and separate packaging of reviewed edits. Real installation/uninstallation/repair behavior still requires testing approved payloads on a suitable test device.
