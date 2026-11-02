@@ -126,11 +126,13 @@ function Read-FactoryConfig {
     }
 
     $options = $config.psadt
-    Assert-FactoryObject $options @('processesToClose','closeProcesses','closeProcessesCountdown','allowDefer','deferTimes','checkDiskSpace','persistPrompt','suppressRebootPassThru','terminalServerMode','disableLogging','scriptAuthor','scriptVersion','scriptDate','successExitCodes','rebootExitCodes','installName','installTitle','completionPrompt') 'app.psadt'
+    $optionKeys = @('processesToClose','closeProcesses','closeProcessesCountdown','allowDefer','deferTimes','checkDiskSpace','persistPrompt','suppressRebootPassThru','terminalServerMode','disableLogging','scriptAuthor','scriptVersion','scriptDate','successExitCodes','rebootExitCodes','installName','installTitle','completionPrompt')
+    Assert-FactoryObject $options $optionKeys 'app.psadt' -Required @($optionKeys | Where-Object { $_ -ne 'closeProcessesCountdown' })
     foreach ($field in @('closeProcesses','allowDefer','checkDiskSpace','persistPrompt','suppressRebootPassThru','terminalServerMode','disableLogging')) {
         if ($options.$field -isnot [bool]) { throw "app.psadt.$field must be a JSON boolean." }
     }
     foreach ($field in @('deferTimes','closeProcessesCountdown')) {
+        if ($field -notin $options.PSObject.Properties.Name) { continue }
         if (($options.$field -isnot [int] -and $options.$field -isnot [long]) -or $options.$field -lt 0 -or $options.$field -gt 86400) {
             throw "app.psadt.$field must be an integer between 0 and 86400."
         }

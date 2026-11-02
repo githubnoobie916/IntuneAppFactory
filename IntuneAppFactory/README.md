@@ -74,7 +74,7 @@ Only `Package/` is deployment content. The JSON snapshots and Intune metadata st
 
 For a new application, copy the entire [examples/notepadplusplus](examples/notepadplusplus) folder into `apps`, then rename and edit it for your app. The [example setup guide](examples/README.md) shows the shared icon location, version folder, installer location and optional PowerShell detection script. Supply your own PNG and approved installer before building.
 
-Use [apps/7zip/26.05/app.json](apps/7zip/26.05/app.json) as the basic example, or [examples/notepadplusplus/8.9.7/app.json](examples/notepadplusplus/8.9.7/app.json) for explicit upload settings. Root and PSADT fields listed below are required, even for disabled features. Missing required settings and unknown properties fail validation. Conditional installer selectors and detection fields apply only to their selected type. The additional `intune.informationUrl` and `intune.upload` fields are optional for compatibility with existing applications; upload defaults and overrides are documented in [UPLOADING.md](UPLOADING.md).
+Use [apps/7zip/26.05/app.json](apps/7zip/26.05/app.json) as the basic example, or [examples/notepadplusplus/8.9.7/app.json](examples/notepadplusplus/8.9.7/app.json) for explicit upload settings. Root and PSADT fields listed below are required, even for disabled features, except where marked optional. Missing required settings and unknown properties fail validation. Conditional installer selectors and detection fields apply only to their selected type. The additional `intune.informationUrl` and `intune.upload` fields are optional for compatibility with existing applications; upload defaults and overrides are documented in [UPLOADING.md](UPLOADING.md).
 
 The toolkit's own `Config/`, `Strings/`, and other resources are copied unchanged. This JSON controls the deployment settings exposed by the generator; it is not a replacement for every internal PSADT configuration option.
 
@@ -115,13 +115,13 @@ Strings remain data, including apostrophes, dollar signs, and text resembling te
 
 ### PSADT settings
 
-All of these fields belong in `psadt` and must be present.
+All of these fields belong in `psadt`. Only `closeProcessesCountdown` is optional.
 
 | Field | Meaning |
 | --- | --- |
 | `processesToClose` | Array of objects with required `name` and `description`. Use `[]` for none. Names omit `.exe`; duplicate names are rejected without regard to case. |
 | `closeProcesses` | Boolean controlling whether configured processes are passed to the welcome dialog for install, uninstall, and repair. |
-| `closeProcessesCountdown` | Explicit countdown in seconds for all three actions when process closing is enabled. |
+| `closeProcessesCountdown` | Optional integer from 0 through 86400 seconds for all three actions when process closing is enabled. Omit the field to leave `CloseProcessesCountdown` out of install, uninstall, and repair. A supplied value, including `0`, is passed unchanged; `null` is invalid. |
 | `allowDefer`, `deferTimes` | Deferrals apply only to interactive installation. Uninstall and repair never defer. Keep both fields present when disabled. |
 | `checkDiskSpace`, `persistPrompt` | Booleans for the original install welcome block. |
 | `suppressRebootPassThru`, `terminalServerMode`, `disableLogging` | Explicit booleans mapped to native session options. |

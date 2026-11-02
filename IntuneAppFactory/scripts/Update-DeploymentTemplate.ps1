@@ -81,9 +81,13 @@ function Update-FactoryDeploymentTemplate {
     }
     $close = ConvertTo-FactoryPowerShellLiteral $options.closeProcesses
     Add-TemplateEdit ([regex]::Escape('if ($adtSession.AppProcessesToClose.Count -gt 0)')) ('if (' + $close + ' -and $adtSession.AppProcessesToClose.Count -gt 0)') 3
-    $addProcesses = "        `$saiwParams.Add('CloseProcesses', `$adtSession.AppProcessesToClose)"
-    Add-TemplateEdit ([regex]::Escape($addProcesses)) ($addProcesses + $newline + "        `$saiwParams.Add('CloseProcessesCountdown', $($options.closeProcessesCountdown))")
-    Add-TemplateEdit '(?m)(?<=-CloseProcessesCountdown )60(?=\r?$)' ([string]$options.closeProcessesCountdown) 2
+    $countdownArgument = ''
+    if ('closeProcessesCountdown' -in $options.PSObject.Properties.Name) {
+        $addProcesses = "        `$saiwParams.Add('CloseProcesses', `$adtSession.AppProcessesToClose)"
+        Add-TemplateEdit ([regex]::Escape($addProcesses)) ($addProcesses + $newline + "        `$saiwParams.Add('CloseProcessesCountdown', $($options.closeProcessesCountdown))")
+        $countdownArgument = " -CloseProcessesCountdown $($options.closeProcessesCountdown)"
+    }
+    Add-TemplateEdit '(?m) -CloseProcessesCountdown 60(?=\r?$)' $countdownArgument 2
     $prompt = $options.completionPrompt
     Add-TemplateEdit ([regex]::Escape('if (!$adtSession.UseDefaultMsi)')) ('if (' + (ConvertTo-FactoryPowerShellLiteral $prompt.enabled) + ' -and !$adtSession.UseDefaultMsi)')
     $promptCommand = '        Show-ADTInstallationPrompt -Message ' + (ConvertTo-FactoryPowerShellLiteral $prompt.message) + ' -ButtonRightText ' + (ConvertTo-FactoryPowerShellLiteral $prompt.buttonRightText) + ' -NoWait:' + (ConvertTo-FactoryPowerShellLiteral $prompt.noWait)

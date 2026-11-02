@@ -95,17 +95,39 @@ try {
             Assert-Throws { Read-FactoryConfig $configPath } 'upload|Registry|informationUrl'
         }
     }
-    Test-Case 'Every root and deployment setting is required even when disabled' {
+    Test-Case 'Required root and deployment settings are enforced even when disabled' {
         foreach ($section in @('root','psadt','completionPrompt','intune')) {
             $original = New-TestConfig
             $settings = switch ($section) { root { $original }; psadt { $original.psadt }; completionPrompt { $original.psadt.completionPrompt }; intune { $original.intune } }
             foreach ($name in @($settings.PSObject.Properties.Name)) {
+                if ($section -eq 'psadt' -and $name -eq 'closeProcessesCountdown') { continue }
                 $config = New-TestConfig
                 $target = switch ($section) { root { $config }; psadt { $config.psadt }; completionPrompt { $config.psadt.completionPrompt }; intune { $config.intune } }
                 $target.PSObject.Properties.Remove($name)
                 Save-TestConfig $config
                 Assert-Throws { Read-FactoryConfig $configPath } ([regex]::Escape(".$name"))
             }
+        }
+    }
+    Test-Case 'Process countdown can be omitted without supplying a default' {
+        $config = New-TestConfig
+        $config.psadt.PSObject.Properties.Remove('closeProcessesCountdown')
+        Save-TestConfig $config
+        $actual = Read-FactoryConfig $configPath
+        Assert-True ('closeProcessesCountdown' -notin $actual.psadt.PSObject.Properties.Name) 'An omitted countdown must stay absent.'
+    }
+    Test-Case 'Supplied process countdown requires an integer from zero through 86400' {
+        foreach ($value in @($null, '60', $true, -1, 86401, 1.5)) {
+            $config = New-TestConfig
+            $config.psadt.closeProcessesCountdown = $value
+            Save-TestConfig $config
+            Assert-Throws { Read-FactoryConfig $configPath } 'closeProcessesCountdown must be an integer'
+        }
+        foreach ($value in @(0, 86400)) {
+            $config = New-TestConfig
+            $config.psadt.closeProcessesCountdown = $value
+            Save-TestConfig $config
+            Assert-True ((Read-FactoryConfig $configPath).psadt.closeProcessesCountdown -eq $value) 'Valid countdown boundary was not preserved.'
         }
     }
     Test-Case 'Arguments must be explicit for MSI and EXE across all three actions' {
@@ -286,6 +308,29 @@ try {
             Assert-True ($state.Opened.DeployMode -eq $mode -and -not $state.Opened.SuppressRebootPassThru -and -not $state.Opened.TerminalServerMode -and -not $state.Opened.DisableLogging) 'Explicit CLI overrides were ignored.'
             # The probe records arguments; PSADT itself suppresses deferral UI in these modes.
             Assert-True ($state.Welcome[0].AllowDefer) 'Configured AllowDefer must be passed unchanged to PSADT regardless of deployment mode.'
+        }
+    }
+    foreach ($countdownPresent in @($false, $true)) {
+        Test-Case "Process countdown distinguishes omission from explicit zero (present: $countdownPresent)" {
+            . "$projectRoot/scripts/Update-DeploymentTemplate.ps1"
+            $config = New-TestConfig
+            $config.psadt.closeProcesses = $true
+            if ($countdownPresent) { $config.psadt.closeProcessesCountdown = 0 }
+            else { $config.psadt.PSObject.Properties.Remove('closeProcessesCountdown') }
+            $entry = Join-Path $detached 'Invoke-AppDeployToolkit.ps1'
+            Copy-Item "$pristineRoot/Invoke-AppDeployToolkit.ps1" $entry -Force
+            Update-FactoryDeploymentTemplate $entry $config
+            if (-not $countdownPresent) {
+                Assert-True ((Get-Content $entry -Raw) -notmatch 'CloseProcessesCountdown') 'Omitted countdown is still present in the generated script.'
+            }
+            foreach ($action in @('Install','Uninstall','Repair')) {
+                $state = Invoke-DeploymentProbe $detached @{DeploymentType=$action;DeployMode='Interactive'}
+                Assert-True ($state.Welcome.Count -eq 1 -and $state.Welcome[0].CloseProcesses.Count -eq 1) "$action must still prompt to close configured processes."
+                Assert-True ($state.Welcome[0].ContainsKey('CloseProcessesCountdown') -eq $countdownPresent) "$action countdown presence differs from JSON."
+                if ($countdownPresent) {
+                    Assert-True ($state.Welcome[0].CloseProcessesCountdown -eq 0) "$action did not preserve the explicit zero countdown."
+                }
+            }
         }
     }
     Test-Case 'Arguments stay literal and MSI repair and installed EXE selectors work' {
