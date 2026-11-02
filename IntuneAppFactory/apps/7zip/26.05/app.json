@@ -1,0 +1,49 @@
+{
+  "name": "7-Zip",
+  "publisher": "Igor Pavlov",
+  "version": "26.05",
+  "architecture": "x64",
+  "language": "EN",
+  "revision": "01",
+  "install": [
+    { "type": "MSI", "path": "7z2605-x64.msi", "arguments": "/qn /norestart REBOOT=ReallySuppress" }
+  ],
+  "uninstall": [
+    { "type": "MSI", "path": "7z2605-x64.msi", "arguments": "/qn /norestart REBOOT=ReallySuppress" }
+  ],
+  "repair": [],
+  "additionalFiles": [],
+  "psadt": {
+    "processesToClose": [{ "name": "7zFM", "description": "7-Zip File Manager" }],
+    "closeProcesses": false,
+    "closeProcessesCountdown": 60,
+    "allowDefer": false,
+    "deferTimes": 3,
+    "checkDiskSpace": true,
+    "persistPrompt": true,
+    "suppressRebootPassThru": false,
+    "terminalServerMode": false,
+    "disableLogging": false,
+    "scriptAuthor": "IntuneAppFactory",
+    "scriptVersion": "1.0.0",
+    "scriptDate": "2026-11-01",
+    "successExitCodes": [0],
+    "rebootExitCodes": [1641, 3010],
+    "installName": "",
+    "installTitle": "",
+    "completionPrompt": {
+      "enabled": false,
+      "message": "7-Zip installation completed.",
+      "buttonRightText": "OK",
+      "noWait": true
+    }
+  },
+  "intune": {
+    "displayName": "7-Zip 26.05 (x64)",
+    "description": "7-Zip file archiver. Example configuration; validate against your approved installer.",
+    "installContext": "system",
+    "detection": { "type": "file", "path": "%ProgramFiles%\\7-Zip", "file": "7z.exe", "version": "26.05" },
+    "icon": ""
+  },
+  "notes": "Example, not a production-certified recipe. Supply the official MSI. Uninstall uses that MSI, so no product code is invented. Review file version detection before publishing."
+}

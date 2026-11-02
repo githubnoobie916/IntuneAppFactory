@@ -1,0 +1,13 @@
+# Generated output, test sandboxes, and the downloaded release archive.
+/output/
+# Downloaded Microsoft Content Prep Tool, license, and local verification receipt.
+/tools/*
+!/tools/README.md
+# The original toolkit lives in the sibling read-only sources directory.
+# Keep configs and optional icons, but do not commit vendor installer payloads.
+/apps/*/*/installers/**
+!/apps/*/*/installers/.gitkeep
+*.intunewin
+*.log
+.DS_Store
+Thumbs.db
