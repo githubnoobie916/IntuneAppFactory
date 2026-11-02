@@ -4,6 +4,8 @@
 Publish an existing factory revision's .intunewin as a new Win32 app.
 .DESCRIPTION
 Use -Preview or -WhatIf for local validation without authentication or tenant writes.
+Per-app publishing defaults come from the revision's intune.upload JSON object.
+Explicit DeployMode, MinimumSupportedWindowsRelease, RestartBehavior and TimeoutSeconds override JSON.
 Requires Microsoft.Graph.Authentication for live upload. See ../UPLOADING.md.
 .PARAMETER GroupId
 Optional single pilot group. AssignmentIntent is also required; omitted means no assignment.
@@ -14,9 +16,9 @@ Use a pre-established Graph session after verifying its tenant and public-cloud 
 param(
     [Parameter(Mandatory)][string]$RevisionPath,
     [string]$IntuneWinPath,
-    [Parameter(Mandatory)][ValidateSet('Silent','NonInteractive','Interactive')][string]$DeployMode,
-    [Parameter(Mandatory)][ValidatePattern('^(Windows11_)?[0-9]{2}H[12]$')][string]$MinimumSupportedWindowsRelease,
-    [Parameter(Mandatory)][ValidateSet('basedOnReturnCode','suppress','allow','force')][string]$RestartBehavior,
+    [ValidateSet('Silent','NonInteractive','Interactive')][string]$DeployMode,
+    [ValidatePattern('^(Windows11_)?[0-9]{2}H[12]$')][string]$MinimumSupportedWindowsRelease,
+    [ValidateSet('basedOnReturnCode','suppress','allow','force')][string]$RestartBehavior,
     [guid]$TenantId = [guid]::Empty,
     [guid]$ClientId = [guid]::Empty,
     [string]$CertificateThumbprint,
@@ -24,7 +26,7 @@ param(
     [switch]$UseExistingConnection,
     [guid]$GroupId = [guid]::Empty,
     [ValidateSet('available','required')][string]$AssignmentIntent,
-    [ValidateRange(1,7200)][int]$TimeoutSeconds = 900,
+    [ValidateRange(1,7200)][int]$TimeoutSeconds,
     [switch]$Preview
 )
 $ErrorActionPreference = 'Stop'
@@ -33,11 +35,12 @@ if ($PSBoundParameters.ContainsKey('GroupId') -xor $PSBoundParameters.ContainsKe
 if ($PSBoundParameters.ContainsKey('GroupId') -and $GroupId -eq [guid]::Empty) { throw 'GroupId cannot be an empty GUID.' }
 if ($CertificateThumbprint -and ($ClientId -eq [guid]::Empty -or $UseDeviceCode)) { throw 'Certificate authentication requires ClientId and cannot be combined with UseDeviceCode.' }
 if ($UseExistingConnection -and ($CertificateThumbprint -or $UseDeviceCode -or $PSBoundParameters.ContainsKey('ClientId'))) { throw 'UseExistingConnection cannot be combined with connection options.' }
-$planOptions = @{
-    RevisionPath=$RevisionPath; IntuneWinPath=$IntuneWinPath; DeployMode=$DeployMode
-    MinimumSupportedWindowsRelease=$MinimumSupportedWindowsRelease; RestartBehavior=$RestartBehavior
+$planOptions = @{ RevisionPath=$RevisionPath; IntuneWinPath=$IntuneWinPath }
+foreach ($name in @('DeployMode','MinimumSupportedWindowsRelease','RestartBehavior','TimeoutSeconds')) {
+    if ($PSBoundParameters.ContainsKey($name)) { $planOptions[$name] = $PSBoundParameters[$name] }
 }
 $plan = Get-FactoryUploadPlan @planOptions
+$TimeoutSeconds = $plan.Transport.TimeoutSeconds
 if ($PSBoundParameters.ContainsKey('GroupId')) {
     $plan.Assignments = @(@{
         '@odata.type'='#microsoft.graph.mobileAppAssignment'; intent=$AssignmentIntent

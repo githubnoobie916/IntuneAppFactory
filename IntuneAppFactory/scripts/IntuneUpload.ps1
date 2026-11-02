@@ -37,10 +37,10 @@ function Assert-FactoryStorageUri([string]$Uri) {
 }
 
 function Invoke-FactoryStoragePut {
-    param([string]$Uri, [byte[]]$Bytes, [string]$ContentType = 'application/octet-stream')
+    param([string]$Uri, [byte[]]$Bytes, [string]$ContentType = 'application/octet-stream', [ValidateRange(0,10)][int]$MaxRetries = 3)
     Assert-FactoryStorageUri $Uri
     # PUT of the same block ID or block list is safe to retry after a lost response.
-    for ($attempt = 0; $attempt -lt 4; $attempt++) {
+    for ($attempt = 0; $attempt -le $MaxRetries; $attempt++) {
         $response = $null
         try {
             $response = Invoke-WebRequest -Method Put -Uri $Uri -Body $Bytes -ContentType $ContentType `
@@ -51,15 +51,15 @@ function Invoke-FactoryStoragePut {
         if ($response -and [int]$response.StatusCode -notin @(408,429,500,502,503,504)) {
             throw "Azure Blob upload failed (HTTP $([int]$response.StatusCode)); SAS details omitted."
         }
-        if ($attempt -lt 3) { Start-Sleep -Seconds ([Math]::Pow(2, $attempt + 1)) }
+        if ($attempt -lt $MaxRetries) { Start-Sleep -Seconds ([Math]::Min(30, [Math]::Pow(2, $attempt + 1))) }
     }
-    throw 'Azure Blob upload failed after four attempts; SAS details omitted.'
+    throw "Azure Blob upload failed after $($MaxRetries + 1) attempts; SAS details omitted."
 }
 
 function Update-FactoryUploadLocation {
-    param([string]$FileUri, $Location, [int]$TimeoutSeconds)
+    param([string]$FileUri, $Location, [int]$TimeoutSeconds, [ValidateRange(1,30)][int]$SasRenewalThresholdMinutes = 3)
     if (-not $Location.azureStorageUriExpirationDateTime) { throw 'Intune did not provide a SAS expiration time.' }
-    if ([DateTimeOffset]::Parse($Location.azureStorageUriExpirationDateTime) -lt [DateTimeOffset]::UtcNow.AddMinutes(3)) {
+    if ([DateTimeOffset]::Parse($Location.azureStorageUriExpirationDateTime) -lt [DateTimeOffset]::UtcNow.AddMinutes($SasRenewalThresholdMinutes)) {
         $null = Invoke-FactoryGraph -Method POST -Uri "$FileUri/renewUpload" -Body @{}
         $Location = Wait-FactoryUploadState -Uri $FileUri -ExpectedState 'azureStorageUriRenewalSuccess' -TimeoutSeconds $TimeoutSeconds
     }
@@ -68,7 +68,12 @@ function Update-FactoryUploadLocation {
 }
 
 function Send-FactoryEncryptedContent {
-    param([string]$Path, [string]$FileUri, $Location, [int]$TimeoutSeconds = 900)
+    param(
+        [string]$Path, [string]$FileUri, $Location, [int]$TimeoutSeconds = 900,
+        [ValidateRange(1048576,16777216)][int]$BlockSizeBytes = 4MB,
+        [ValidateRange(0,10)][int]$MaxRetries = 3,
+        [ValidateRange(1,30)][int]$SasRenewalThresholdMinutes = 3
+    )
     $archive = [IO.Compression.ZipFile]::OpenRead($Path)
     try {
         $entry = $archive.GetEntry('IntuneWinPackage/Contents/IntunePackage.intunewin')
@@ -76,7 +81,7 @@ function Send-FactoryEncryptedContent {
         $stream = $entry.Open()
         try {
             $blocks = [Collections.Generic.List[string]]::new()
-            $buffer = [byte[]]::new(4MB)
+            $buffer = [byte[]]::new($BlockSizeBytes)
             $total = 0L
             while ($total -lt $entry.Length) {
                 $count = 0
@@ -87,17 +92,17 @@ function Send-FactoryEncryptedContent {
                 }
                 if ($count -eq 0) { throw 'Unexpected end of encrypted content.' }
                 if ($blocks.Count -ge 50000) { throw 'Encrypted content exceeds the block upload limit.' }
-                $Location = Update-FactoryUploadLocation $FileUri $Location $TimeoutSeconds
+                $Location = Update-FactoryUploadLocation $FileUri $Location $TimeoutSeconds -SasRenewalThresholdMinutes $SasRenewalThresholdMinutes
                 $block = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($blocks.Count.ToString('D8')))
                 $data = [byte[]]::new($count)
                 [Array]::Copy($buffer, $data, $count)
-                Invoke-FactoryStoragePut -Uri ($Location.azureStorageUri + '&comp=block&blockid=' + [uri]::EscapeDataString($block)) -Bytes $data
+                Invoke-FactoryStoragePut -Uri ($Location.azureStorageUri + '&comp=block&blockid=' + [uri]::EscapeDataString($block)) -Bytes $data -MaxRetries $MaxRetries
                 $blocks.Add($block); $total += $count
                 Write-Progress -Activity 'Uploading encrypted Intune content' -Status "$total / $($entry.Length) bytes" -PercentComplete (100 * $total / $entry.Length)
             }
-            $Location = Update-FactoryUploadLocation $FileUri $Location $TimeoutSeconds
+            $Location = Update-FactoryUploadLocation $FileUri $Location $TimeoutSeconds -SasRenewalThresholdMinutes $SasRenewalThresholdMinutes
             $xml = '<?xml version="1.0" encoding="utf-8"?><BlockList>' + (($blocks | ForEach-Object { "<Latest>$_</Latest>" }) -join '') + '</BlockList>'
-            Invoke-FactoryStoragePut -Uri ($Location.azureStorageUri + '&comp=blocklist') -Bytes ([Text.Encoding]::UTF8.GetBytes($xml)) -ContentType 'application/xml'
+            Invoke-FactoryStoragePut -Uri ($Location.azureStorageUri + '&comp=blocklist') -Bytes ([Text.Encoding]::UTF8.GetBytes($xml)) -ContentType 'application/xml' -MaxRetries $MaxRetries
         } finally { $stream.Dispose(); Write-Progress -Activity 'Uploading encrypted Intune content' -Completed }
     } finally { $archive.Dispose() }
 }
@@ -141,10 +146,18 @@ function Read-FactoryUploadArchive([string]$Path) {
     } finally { $archive.Dispose() }
 }
 
-function ConvertTo-FactoryDetectionRule($Detection, [string]$Architecture) {
+function ConvertTo-FactoryDetectionRule($Detection, [string]$Architecture, [byte[]]$ScriptBytes) {
     if ($null -eq $Detection) { throw 'Publishing requires non-null intune.detection metadata.' }
     $rule = @{ ruleType = 'detection' }
     switch ($Detection.type) {
+        'powershell' {
+            if (-not $ScriptBytes) { throw 'PowerShell detection requires the saved revision script.' }
+            $rule['@odata.type'] = '#microsoft.graph.win32LobAppPowerShellScriptRule'
+            $rule.scriptContent = [Convert]::ToBase64String($ScriptBytes)
+            $rule.runAs32Bit = $Detection.runAs32Bit
+            $rule.enforceSignatureCheck = $Detection.enforceSignatureCheck
+            $rule.operationType = 'notConfigured'; $rule.operator = 'notConfigured'
+        }
         'msi' {
             $rule['@odata.type'] = '#microsoft.graph.win32LobAppProductCodeRule'
             $rule.productCode = $Detection.productCode
@@ -165,6 +178,10 @@ function ConvertTo-FactoryDetectionRule($Detection, [string]$Architecture) {
             $rule.keyPath = $Detection.key; $rule.valueName = $Detection.valueName
             $rule.check32BitOn64System = ($Architecture -eq 'x86')
             $rule.operationType = 'string'; $rule.operator = 'equal'; $rule.comparisonValue = $Detection.value
+            if ('operationType' -in $Detection.PSObject.Properties.Name) {
+                $rule.operationType = $Detection.operationType; $rule.operator = $Detection.operator
+            }
+            if ('check32BitOn64System' -in $Detection.PSObject.Properties.Name) { $rule.check32BitOn64System = $Detection.check32BitOn64System }
         }
         default { throw 'Unsupported detection type.' }
     }
@@ -175,9 +192,10 @@ function Get-FactoryUploadPlan {
     param(
         [Parameter(Mandatory)][string]$RevisionPath,
         [string]$IntuneWinPath,
-        [Parameter(Mandatory)][ValidateSet('Silent','NonInteractive','Interactive')][string]$DeployMode,
-        [Parameter(Mandatory)][ValidatePattern('^(Windows11_)?[0-9]{2}H[12]$')][string]$MinimumSupportedWindowsRelease,
-        [Parameter(Mandatory)][ValidateSet('basedOnReturnCode','suppress','allow','force')][string]$RestartBehavior
+        [ValidateSet('Silent','NonInteractive','Interactive')][string]$DeployMode,
+        [ValidatePattern('^(Windows11_)?[0-9]{2}H[12]$')][string]$MinimumSupportedWindowsRelease,
+        [ValidateSet('basedOnReturnCode','suppress','allow','force')][string]$RestartBehavior,
+        [ValidateRange(1,7200)][int]$TimeoutSeconds
     )
     $RevisionPath = Resolve-FactoryIntuneWinPath $RevisionPath
     Assert-FactoryNoLinks $RevisionPath
@@ -187,8 +205,27 @@ function Get-FactoryUploadPlan {
     if ($build.factory -ne 'IntuneAppFactory') { throw 'Select a generated IntuneAppFactory revision directory.' }
     $config = Read-FactoryConfig -Path (Get-FactoryPath $RevisionPath 'app.json') -ExpectedVersion $build.version
     if ($config.revision -cne $build.revision) { throw 'The app.json and build.json revisions do not match.' }
-    $detection = ConvertTo-FactoryDetectionRule $config.intune.detection $config.architecture
+    $upload = $config.intune.upload
+    if (-not $DeployMode -and $upload.deployMode) { $DeployMode = $upload.deployMode }
+    if (-not $MinimumSupportedWindowsRelease -and $upload.minimumSupportedWindowsRelease) { $MinimumSupportedWindowsRelease = $upload.minimumSupportedWindowsRelease }
+    if (-not $RestartBehavior -and $upload.restartBehavior) { $RestartBehavior = $upload.restartBehavior }
+    foreach ($setting in @('DeployMode','MinimumSupportedWindowsRelease','RestartBehavior')) {
+        if (-not (Get-Variable $setting -ValueOnly)) { throw "$setting is required: specify it in intune.upload or on the command line." }
+    }
+    $transport = @{MaxRetries=3;BlockSizeBytes=4MB;SasRenewalThresholdMinutes=3;TimeoutSeconds=900}
+    if ($upload.transport) {
+        foreach ($name in @($transport.Keys)) { $transport[$name] = [int]$upload.transport.$name }
+    }
+    if ($PSBoundParameters.ContainsKey('TimeoutSeconds')) { $transport.TimeoutSeconds = $TimeoutSeconds }
+    if ($null -eq $config.intune.detection) { throw 'Publishing requires non-null intune.detection metadata.' }
     if (($config.intune | ConvertTo-Json -Depth 10 -Compress) -cne ($build.intune | ConvertTo-Json -Depth 10 -Compress)) { throw 'Intune metadata differs between app.json and build.json. Regenerate a consistent revision.' }
+    $scriptBytes = $null
+    if ($config.intune.detection.type -eq 'powershell') {
+        if ($build.detectionScript.path -cne 'Detection/Detect.ps1' -or $build.detectionScript.sha256 -notmatch '^[A-Fa-f0-9]{64}$') { throw 'Missing or invalid detection script snapshot metadata. Rebuild this revision.' }
+        $scriptBytes = Read-FactoryDetectionScript (Get-FactoryPath $RevisionPath 'Detection/Detect.ps1')
+        if ((Get-FactoryBytesHash $scriptBytes) -ne $build.detectionScript.sha256) { throw 'Detection script hash changed. Edit the source script and rebuild a consistent revision.' }
+    }
+    $detection = ConvertTo-FactoryDetectionRule $config.intune.detection $config.architecture $scriptBytes
     foreach ($action in @('install','uninstall')) {
         $expected = 'Invoke-AppDeployToolkit.exe -DeploymentType ' + (Get-Culture).TextInfo.ToTitleCase($action)
         if ($build."${action}Command" -cne $expected) { throw 'Unsupported build commands. Regenerate with the current factory before uploading.' }
@@ -196,16 +233,22 @@ function Get-FactoryUploadPlan {
     if (-not $IntuneWinPath) { $IntuneWinPath = Get-FactoryPath $RevisionPath 'IntuneWin/Invoke-AppDeployToolkit.intunewin' }
     $IntuneWinPath = Resolve-FactoryIntuneWinPath $IntuneWinPath
     Assert-FactoryNoLinks $IntuneWinPath
+    if (-not (Test-Path -LiteralPath $IntuneWinPath -PathType Leaf)) { throw "IntuneWin file not found: '$IntuneWinPath'. Package the selected revision before uploading." }
     if ([IO.Path]::GetExtension($IntuneWinPath) -ine '.intunewin') { throw 'IntuneWinPath must be an .intunewin file.' }
     $archive = Read-FactoryUploadArchive $IntuneWinPath
+    if ([Math]::Ceiling($archive.FileBody.sizeEncrypted / [double]$transport.BlockSizeBytes) -gt 50000) { throw 'Encrypted content exceeds the block upload limit for the configured blockSizeBytes.' }
     $codes = [ordered]@{}
-    foreach ($code in $config.psadt.successExitCodes) { $codes[[string]$code] = 'success' }
-    foreach ($code in $config.psadt.rebootExitCodes) {
-        if ($codes.Contains([string]$code)) { throw 'Success and reboot exit codes overlap.' }
-        $codes[[string]$code] = if ($code -eq 1641) { 'hardReboot' } else { 'softReboot' }
+    if ($upload.returnCodes) {
+        foreach ($entry in $upload.returnCodes) { $codes[[string]$entry.returnCode] = $entry.type }
+    } else {
+        foreach ($code in $config.psadt.successExitCodes) { $codes[[string]$code] = 'success' }
+        foreach ($code in $config.psadt.rebootExitCodes) {
+            if ($codes.Contains([string]$code)) { throw 'Success and reboot exit codes overlap.' }
+            $codes[[string]$code] = if ($code -eq 1641) { 'hardReboot' } else { 'softReboot' }
+        }
+        if (-not $codes.Contains('1618')) { $codes['1618'] = 'retry' }
+        if (-not $codes.Contains('1603')) { $codes['1603'] = 'failed' }
     }
-    if (-not $codes.Contains('1618')) { $codes['1618'] = 'retry' }
-    if (-not $codes.Contains('1603')) { $codes['1603'] = 'failed' }
     $body = @{
         '@odata.type' = '#microsoft.graph.win32LobApp'
         displayName = $config.intune.displayName; description = $config.intune.description; publisher = $config.publisher
@@ -219,6 +262,7 @@ function Get-FactoryUploadPlan {
         rules = @($detection)
         returnCodes = @($codes.Keys | ForEach-Object { @{ returnCode = [int]$_; type = $codes[$_] } })
     }
+    if ($config.intune.informationUrl) { $body.informationUrl = $config.intune.informationUrl }
     if ($build.icon) {
         $icon = Get-FactoryPath $RevisionPath $build.icon
         Assert-FactoryNoLinks $icon
@@ -230,6 +274,7 @@ function Get-FactoryUploadPlan {
         RevisionPath = $RevisionPath; IntuneWinPath = $IntuneWinPath
         SHA256 = (Get-FileHash -LiteralPath $IntuneWinPath -Algorithm SHA256).Hash
         AppBody = $body; FileBody = $archive.FileBody
+        Transport = $transport
         Assignments = @()
     }
 }
@@ -244,7 +289,8 @@ function Write-FactoryUploadReceipt([IO.FileStream]$Stream, $Receipt) {
 }
 
 function Invoke-FactoryPublishPlan {
-    param($Plan, [guid]$TenantId, [int]$TimeoutSeconds = 900)
+    param($Plan, [guid]$TenantId, [ValidateRange(1,7200)][int]$TimeoutSeconds)
+    if (-not $PSBoundParameters.ContainsKey('TimeoutSeconds')) { $TimeoutSeconds = $Plan.Transport.TimeoutSeconds }
     $receiptPath = Get-FactoryPath $Plan.RevisionPath "upload-$TenantId.json"
     Assert-FactoryNoLinks $receiptPath
     if (Test-Path -LiteralPath $receiptPath) { throw "Upload receipt already exists: '$receiptPath'. Review its app ID and tenant state before retrying; see UPLOADING.md." }
@@ -282,7 +328,8 @@ function Invoke-FactoryPublishPlan {
         $fileUri = $contentUri + '/' + [uri]::EscapeDataString($receipt.ContentVersionId) + '/files/' + [uri]::EscapeDataString($receipt.FileId)
         $receipt.Stage = 'UploadingContent'; Write-FactoryUploadReceipt $receiptStream $receipt
         $location = Wait-FactoryUploadState -Uri $fileUri -ExpectedState 'azureStorageUriRequestSuccess' -TimeoutSeconds $TimeoutSeconds
-        Send-FactoryEncryptedContent -Path $Plan.IntuneWinPath -FileUri $fileUri -Location $location -TimeoutSeconds $TimeoutSeconds
+        Send-FactoryEncryptedContent -Path $Plan.IntuneWinPath -FileUri $fileUri -Location $location -TimeoutSeconds $TimeoutSeconds `
+            -BlockSizeBytes $Plan.Transport.BlockSizeBytes -MaxRetries $Plan.Transport.MaxRetries -SasRenewalThresholdMinutes $Plan.Transport.SasRenewalThresholdMinutes
         $receipt.Stage = 'CommittingFile'; Write-FactoryUploadReceipt $receiptStream $receipt
         $metadata = Read-FactoryUploadArchive $Plan.IntuneWinPath
         $null = Invoke-FactoryGraph -Method POST -Uri "$fileUri/commit" -Body @{fileEncryptionInfo=$metadata.EncryptionInfo}

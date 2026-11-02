@@ -61,6 +61,40 @@ try {
         Save-TestConfig $config
         Assert-Throws { Read-FactoryConfig $configPath } 'Unknown property.*deployMode'
     }
+    Test-Case 'Optional upload JSON validates while legacy configuration stays supported' {
+        $example = Get-Content "$projectRoot/examples/notepadplusplus.app.json" -Raw | ConvertFrom-Json
+        Save-TestConfig $example
+        $actual = Read-FactoryConfig $configPath
+        Assert-True ($actual.intune.upload.returnCodes.Count -eq 4 -and $actual.intune.detection.operationType -eq 'version') 'Explicit upload configuration was lost.'
+        $example.intune.PSObject.Properties.Remove('upload')
+        $example.intune.PSObject.Properties.Remove('informationUrl')
+        Save-TestConfig $example
+        $null = Read-FactoryConfig $configPath
+    }
+    Test-Case 'Invalid upload fields, transport limits, return codes and detection operators are rejected' {
+        foreach ($change in @(
+            { param($c) $c.intune.upload.transport.maxRetries = -1 },
+            { param($c) $c.intune.upload.transport.blockSizeBytes = 0 },
+            { param($c) $c.intune.upload.transport.timeoutSeconds = '900' },
+            { param($c) $c.intune.upload.transport.sasRenewalThresholdMinutes = 0 },
+            { param($c) $c.intune.upload.returnCodes += $c.intune.upload.returnCodes[0] },
+            { param($c) $c.intune.upload.returnCodes[0].type = 'ignore' },
+            { param($c) $c.intune.upload.returnCodes[0].returnCode = '0' },
+            { param($c) $c.intune.upload | Add-Member clientSecret 'must-not-be-stored' },
+            { param($c) $c.intune.upload.restartBehavior = 'never' },
+            { param($c) $c.intune.upload.PSObject.Properties.Remove('deployMode') },
+            { param($c) $c.intune.informationUrl = 'file:///C:/test' },
+            { param($c) $c.intune.detection.check32BitOn64System = 'false' },
+            { param($c) $c.intune.detection.value = 'not a version' },
+            { param($c) $c.intune.detection.operator = 'notConfigured' },
+            { param($c) $c.intune.detection.PSObject.Properties.Remove('operator') }
+        )) {
+            $example = Get-Content "$projectRoot/examples/notepadplusplus.app.json" -Raw | ConvertFrom-Json
+            & $change $example
+            Save-TestConfig $example
+            Assert-Throws { Read-FactoryConfig $configPath } 'upload|Registry|informationUrl'
+        }
+    }
     Test-Case 'Every root and deployment setting is required even when disabled' {
         foreach ($section in @('root','psadt','completionPrompt','intune')) {
             $original = New-TestConfig
@@ -147,6 +181,40 @@ try {
             $relative = $file.FullName.Substring($pristineRoot.Length + 1)
             if ($relative -eq 'Invoke-AppDeployToolkit.ps1') { continue }
             Assert-True ((Get-FileHash $file.FullName).Hash -eq (Get-FileHash (Join-Path $built.PackagePath $relative)).Hash) "Template file changed: $relative"
+        }
+    }
+    Test-Case 'Builder snapshots detection script bytes without executing them or including them in Package' {
+        $appConfigPath = "$fixtureRoot/apps/Fixture/26.05/app.json"
+        $originalConfig = Get-Content $appConfigPath -Raw
+        $scriptPath = "$fixtureRoot/apps/Fixture/26.05/Detect.ps1"
+        try {
+            $config = $originalConfig | ConvertFrom-Json
+            $config.intune.detection = [pscustomobject]@{type='powershell';scriptPath='Detect.ps1';runAs32Bit=$false;enforceSignatureCheck=$false}
+            $config | ConvertTo-Json -Depth 20 | Set-Content $appConfigPath -Encoding UTF8
+            $scriptBytes = [byte[]](@(239,187,191) + [Text.Encoding]::UTF8.GetBytes('throw "Detection must never execute during generation"'))
+            [IO.File]::WriteAllBytes($scriptPath, $scriptBytes)
+            $scriptBuild = & $builder -AppName Fixture -Version 26.05 -Revision '88'
+            $snapshot = Join-Path $scriptBuild.OutputPath 'Detection/Detect.ps1'
+            $metadata = Get-Content (Join-Path $scriptBuild.OutputPath 'build.json') -Raw | ConvertFrom-Json
+            Assert-True ((Get-FileHash $snapshot).Hash -eq (Get-FileHash $scriptPath).Hash) 'Detection bytes changed.'
+            Assert-True ($metadata.detectionScript.sha256 -eq (Get-FileHash $snapshot).Hash) 'Snapshot hash mismatch.'
+            Assert-True (-not (Test-Path (Join-Path $scriptBuild.PackagePath 'Detection'))) 'Detection script is in the installer package.'
+            Set-Content $scriptPath 'exit 1'
+            Assert-True ((Get-FileHash $snapshot).Hash -eq $metadata.detectionScript.sha256) 'Source changes affected existing revision.'
+            Remove-Item $scriptPath
+            Assert-Throws { & $builder -AppName Fixture -Version 26.05 -Revision '89' } 'not found'
+            Assert-True (-not (Test-Path "$fixtureRoot/output/Fixture/26.05/rev-89")) 'Missing script left output.'
+        } finally { Set-Content $appConfigPath $originalConfig -Encoding UTF8 }
+    }
+    Test-Case 'Detection script validation rejects empty, invalid UTF-8 and invalid PowerShell without executing' {
+        $scriptPath = Join-Path $sandbox 'invalid-detection.ps1'
+        foreach ($case in @(
+            @{bytes=[byte[]]@();pattern='empty'},
+            @{bytes=[byte[]]@(255,254,0);pattern='UTF-8'},
+            @{bytes=[Text.Encoding]::UTF8.GetBytes('if (');pattern='syntax errors'}
+        )) {
+            [IO.File]::WriteAllBytes($scriptPath, $case.bytes)
+            Assert-Throws { Read-FactoryDetectionScript $scriptPath } $case.pattern
         }
     }
     Test-Case 'Detached package executes install, uninstall and repair without factory files' {

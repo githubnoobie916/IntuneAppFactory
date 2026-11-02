@@ -43,6 +43,105 @@ try {
 } finally { $archive.Dispose() }
 $planArgs = @{ RevisionPath=$sandbox; DeployMode='Silent'; MinimumSupportedWindowsRelease='Windows11_23H2'; RestartBehavior='basedOnReturnCode' }
 try {
+    Test-Case 'PowerShell detection preserves bytes, uses the revision snapshot and rejects changed content' {
+        $originalConfig = Get-Content "$sandbox/app.json" -Raw
+        $originalBuild = Get-Content "$sandbox/build.json" -Raw
+        try {
+            $configured = $originalConfig | ConvertFrom-Json
+            $configured.intune.detection = [pscustomobject]@{type='powershell';scriptPath='detection/source.ps1';runAs32Bit=$false;enforceSignatureCheck=$true}
+            $configured | ConvertTo-Json -Depth 20 | Set-Content "$sandbox/app.json"
+            $null = New-Item -ItemType Directory "$sandbox/Detection" -Force
+            $scriptBytes = [byte[]](@(239,187,191) + [Text.Encoding]::UTF8.GetBytes('throw "Must never execute during build or preview"'))
+            [IO.File]::WriteAllBytes("$sandbox/Detection/Detect.ps1", $scriptBytes)
+            $updatedBuild = $originalBuild | ConvertFrom-Json
+            $updatedBuild.intune = $configured.intune
+            $updatedBuild | Add-Member detectionScript ([pscustomobject]@{path='Detection/Detect.ps1';sha256=(Get-FileHash "$sandbox/Detection/Detect.ps1").Hash})
+            $updatedBuild | ConvertTo-Json -Depth 20 | Set-Content "$sandbox/build.json"
+            $plan = Get-FactoryUploadPlan @planArgs
+            $rule = $plan.AppBody.rules[0]
+            Assert-True ($rule.'@odata.type' -eq '#microsoft.graph.win32LobAppPowerShellScriptRule' -and $rule.ruleType -eq 'detection') 'Incorrect Graph rule.'
+            Assert-True ($rule.scriptContent -ceq [Convert]::ToBase64String($scriptBytes)) 'Script encoding changed, including BOM.'
+            Assert-True ($rule.enforceSignatureCheck -and -not $rule.runAs32Bit) 'Script settings changed.'
+            Assert-True ($rule.operationType -eq 'notConfigured' -and $rule.operator -eq 'notConfigured') 'Detection compared output.'
+            Assert-True (-not $rule.ContainsKey('runAsAccount') -and -not $rule.ContainsKey('displayName') -and -not $rule.ContainsKey('comparisonValue')) 'Requirement-only fields emitted.'
+            Set-Content "$sandbox/Detection/Detect.ps1" 'exit 1'
+            Assert-Throws { Get-FactoryUploadPlan @planArgs } 'hash|changed'
+            Remove-Item "$sandbox/Detection/Detect.ps1"
+            Assert-Throws { Get-FactoryUploadPlan @planArgs } 'not found'
+        } finally {
+            Set-Content "$sandbox/app.json" $originalConfig
+            Set-Content "$sandbox/build.json" $originalBuild
+        }
+    }
+    Test-Case 'PowerShell detection schema rejects unsafe paths and non-boolean flags' {
+        $originalConfig = Get-Content "$sandbox/app.json" -Raw
+        try {
+            foreach ($mutate in @(
+                { param($d) $d.scriptPath = '../outside.ps1' },
+                { param($d) $d.scriptPath = 'script.exe' },
+                { param($d) $d.runAs32Bit = 'false' },
+                { param($d) $d.enforceSignatureCheck = 0 },
+                { param($d) $d.type = @('powershell') },
+                { param($d) $d | Add-Member runAsAccount 'system' }
+            )) {
+                $configured = $originalConfig | ConvertFrom-Json
+                $configured.intune.detection = [pscustomobject]@{type='powershell';scriptPath='detection/Detect.ps1';runAs32Bit=$false;enforceSignatureCheck=$false}
+                & $mutate $configured.intune.detection
+                $configured | ConvertTo-Json -Depth 20 | Set-Content "$sandbox/app.json"
+                Assert-Throws { Read-FactoryConfig -Path "$sandbox/app.json" -ExpectedVersion '26.05' } '.'
+            }
+        } finally { Set-Content "$sandbox/app.json" $originalConfig }
+    }
+    Test-Case 'JSON alone configures publication, registry version detection and transport' {
+        $originalConfig = Get-Content "$sandbox/app.json" -Raw
+        $originalBuild = Get-Content "$sandbox/build.json" -Raw
+        try {
+            $configured = $originalConfig | ConvertFrom-Json
+            $configured.intune | Add-Member informationUrl 'https://example.com/app'
+            $configured.intune | Add-Member upload ([pscustomobject]@{
+                deployMode='NonInteractive'; minimumSupportedWindowsRelease='Windows11_24H2'; restartBehavior='suppress'
+                returnCodes=@([pscustomobject]@{returnCode=0;type='success'},[pscustomobject]@{returnCode=42;type='retry'})
+                transport=[pscustomobject]@{maxRetries=0;blockSizeBytes=1048576;sasRenewalThresholdMinutes=5;timeoutSeconds=120}
+            })
+            $configured.intune.detection = [pscustomobject]@{type='registry';key='HKEY_LOCAL_MACHINE\SOFTWARE\Test';valueName='DisplayVersion';value='8.9.7.0';operationType='version';operator='greaterThanOrEqual';check32BitOn64System=$true}
+            $configured | ConvertTo-Json -Depth 20 | Set-Content "$sandbox/app.json"
+            $updatedBuild = $originalBuild | ConvertFrom-Json
+            $updatedBuild.intune = $configured.intune
+            $updatedBuild | ConvertTo-Json -Depth 20 | Set-Content "$sandbox/build.json"
+            $plan = & "$projectRoot/scripts/Upload-IntuneWin.ps1" -RevisionPath $sandbox -Preview
+            Assert-True ($plan.AppBody.installCommandLine -match '-DeployMode NonInteractive$') 'JSON deployment mode ignored.'
+            Assert-True ($plan.AppBody.informationUrl -eq 'https://example.com/app') 'Information URL ignored.'
+            Assert-True ($plan.AppBody.installExperience.deviceRestartBehavior -eq 'suppress') 'Restart choice ignored.'
+            Assert-True ($plan.AppBody.rules[0].operationType -eq 'version' -and $plan.AppBody.rules[0].check32BitOn64System) 'Registry version or view ignored.'
+            Assert-True ($plan.AppBody.returnCodes.Count -eq 2 -and $plan.AppBody.returnCodes[1].returnCode -eq 42) 'Custom return codes changed.'
+            Assert-True ($plan.Transport.MaxRetries -eq 0 -and $plan.Transport.BlockSizeBytes -eq 1MB -and $plan.Transport.TimeoutSeconds -eq 120) 'Transport choices ignored.'
+            $override = & "$projectRoot/scripts/Upload-IntuneWin.ps1" -RevisionPath $sandbox -DeployMode Silent -RestartBehavior allow -MinimumSupportedWindowsRelease Windows11_25H2 -TimeoutSeconds 15 -Preview
+            Assert-True ($override.AppBody.installCommandLine -match '-DeployMode Silent$' -and $override.AppBody.installExperience.deviceRestartBehavior -eq 'allow' -and $override.Transport.TimeoutSeconds -eq 15 -and $override.AppBody.minimumSupportedWindowsRelease -eq 'Windows11_25H2') 'CLI precedence failed.'
+        } finally {
+            Set-Content "$sandbox/app.json" $originalConfig
+            Set-Content "$sandbox/build.json" $originalBuild
+        }
+    }
+    Test-Case 'Missing upload settings fail locally without prompting' {
+        Assert-Throws { Get-FactoryUploadPlan -RevisionPath $sandbox } 'deployMode.*required|DeployMode.*required'
+    }
+    Test-Case 'JSON enum fields reject singleton arrays before Graph publication' {
+        foreach ($field in @('deployMode','restartBehavior','returnCodeType','operationType','operator')) {
+            $example = Get-Content "$projectRoot/examples/notepadplusplus.app.json" -Raw | ConvertFrom-Json
+            switch ($field) {
+                'deployMode' { $example.intune.upload.deployMode = @('Silent') }
+                'restartBehavior' { $example.intune.upload.restartBehavior = @('suppress') }
+                'returnCodeType' { $example.intune.upload.returnCodes[0].type = @('success') }
+                'operationType' { $example.intune.detection.operationType = @('version') }
+                'operator' { $example.intune.detection.operator = @('greaterThanOrEqual') }
+            }
+            if ($field -in @('operationType','operator')) {
+                Assert-Throws { Assert-FactoryRegistryDetectionOptions $example.intune.detection } 'string'
+            } else {
+                Assert-Throws { Assert-FactoryUploadConfig $example.intune.upload } 'string'
+            }
+        }
+    }
     Test-Case 'Preview uses revision metadata and exposes no encryption secrets' {
         $plan = Get-FactoryUploadPlan @planArgs
         Assert-True ($plan.AppBody.installCommandLine -eq 'Invoke-AppDeployToolkit.exe -DeploymentType Install -DeployMode Silent') 'Wrong install command.'
@@ -77,6 +176,9 @@ try {
         Assert-True ($script:puts[1].Bytes.Length -eq 17 -and $script:puts[1].Bytes[-1] -eq 99) 'Final block was corrupted.'
         $list = [Text.Encoding]::UTF8.GetString($script:puts[2].Bytes)
         Assert-True ($list -match '<Latest>MDAwMDAwMDA=</Latest><Latest>MDAwMDAwMDE=</Latest>') 'Wrong ordered block list.'
+        $script:puts.Clear()
+        Send-FactoryEncryptedContent -Path $archivePath -FileUri '/test' -Location $location -TimeoutSeconds 10 -BlockSizeBytes 1MB -MaxRetries 0 -SasRenewalThresholdMinutes 5
+        Assert-True ($script:puts.Count -eq 6 -and $script:puts[0].Bytes.Length -eq 1MB -and $script:puts[4].Bytes.Length -eq 17) 'Configured block size not used.'
     }
     Test-Case 'Failed service states stop immediately and never count as success' {
         function Invoke-FactoryGraph { @{ uploadState='commitFileFailed' } }
@@ -187,9 +289,16 @@ try {
             if ($Method -eq 'POST' -and $Uri -match '/renewUpload$') { $script:renewed=$true; return }
             return @{uploadState='azureStorageUriRenewalSuccess';azureStorageUri='https://renewed.blob.core.windows.net/a?sig=fake';azureStorageUriExpirationDateTime=[DateTimeOffset]::UtcNow.AddHours(1).ToString('o')}
         }
-        $old = @{azureStorageUri='https://old.blob.core.windows.net/a?sig=fake';azureStorageUriExpirationDateTime=[DateTimeOffset]::UtcNow.AddSeconds(30).ToString('o')}
-        $new = Update-FactoryUploadLocation '/test' $old 1
+        $old = @{azureStorageUri='https://old.blob.core.windows.net/a?sig=fake';azureStorageUriExpirationDateTime=[DateTimeOffset]::UtcNow.AddMinutes(4).ToString('o')}
+        $new = Update-FactoryUploadLocation '/test' $old 1 -SasRenewalThresholdMinutes 5
         Assert-True ($script:renewed -and $new.azureStorageUri -match '//renewed\.') 'Expired SAS not renewed.'
+    }
+    Test-Case 'Zero retries performs exactly one storage attempt' {
+        $probe = @{Calls=0}
+        function Invoke-WebRequest { $probe.Calls++; return @{StatusCode=503} }
+        function Start-Sleep { }
+        Assert-Throws { Invoke-FactoryStoragePut -Uri 'https://test.blob.core.windows.net/a?sig=fake' -Bytes ([byte[]]@(1)) -MaxRetries 0 } 'after 1 attempt'
+        Assert-True ($probe.Calls -eq 1) 'Zero retries still retried storage.'
     }
     Test-Case 'Invalid metadata and exit code conflicts fail before publication' {
         $config = Get-Content "$projectRoot/apps/7zip/26.05/app.json" -Raw | ConvertFrom-Json

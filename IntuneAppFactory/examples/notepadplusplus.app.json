@@ -1,0 +1,75 @@
+{
+  "name": "Notepad++",
+  "publisher": "Notepad++ Team",
+  "version": "8.9.7",
+  "architecture": "x64",
+  "language": "EN",
+  "revision": "01",
+  "install": [
+    { "type": "EXE", "path": "npp.8.9.7.Installer.x64.exe", "arguments": "/S" }
+  ],
+  "uninstall": [
+    { "type": "EXE", "executable": "%ProgramFiles%\\Notepad++\\uninstall.exe", "arguments": "/S" }
+  ],
+  "repair": [],
+  "additionalFiles": [],
+  "psadt": {
+    "processesToClose": [],
+    "closeProcesses": false,
+    "closeProcessesCountdown": 60,
+    "allowDefer": false,
+    "deferTimes": 3,
+    "checkDiskSpace": true,
+    "persistPrompt": true,
+    "suppressRebootPassThru": false,
+    "terminalServerMode": false,
+    "disableLogging": false,
+    "scriptAuthor": "IntuneAppFactory",
+    "scriptVersion": "1.0.0",
+    "scriptDate": "2026-11-01",
+    "successExitCodes": [0],
+    "rebootExitCodes": [1641, 3010],
+    "installName": "",
+    "installTitle": "",
+    "completionPrompt": {
+      "enabled": false,
+      "message": "Notepad++ installation completed.",
+      "buttonRightText": "OK",
+      "noWait": true
+    }
+  },
+  "intune": {
+    "displayName": "Notepad++ 8.9.7 (x64)",
+    "description": "Notepad++ is a free source code editor and Notepad replacement.",
+    "informationUrl": "https://notepad-plus-plus.org/downloads/v8.9.7/",
+    "installContext": "system",
+    "icon": "",
+    "detection": {
+      "type": "registry",
+      "key": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Notepad++",
+      "valueName": "DisplayVersion",
+      "value": "8.9.7.0",
+      "operationType": "version",
+      "operator": "greaterThanOrEqual",
+      "check32BitOn64System": false
+    },
+    "upload": {
+      "deployMode": "Silent",
+      "minimumSupportedWindowsRelease": "Windows11_24H2",
+      "restartBehavior": "suppress",
+      "returnCodes": [
+        { "returnCode": 0, "type": "success" },
+        { "returnCode": 3010, "type": "softReboot" },
+        { "returnCode": 1641, "type": "hardReboot" },
+        { "returnCode": 1618, "type": "retry" }
+      ],
+      "transport": {
+        "maxRetries": 10,
+        "blockSizeBytes": 4194304,
+        "sasRenewalThresholdMinutes": 5,
+        "timeoutSeconds": 900
+      }
+    }
+  },
+  "notes": "Adapted from the user-provided example; version, installer switches and registry detection need vendor/device validation. Windows11_24H2 is an illustrative fleet requirement, not equivalent to the original v10_1607 setting. No installer has been downloaded."
+}

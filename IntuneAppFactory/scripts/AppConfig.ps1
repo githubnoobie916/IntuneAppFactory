@@ -166,7 +166,13 @@ function Read-FactoryConfig {
     Assert-FactoryText $prompt.message 'app.psadt.completionPrompt.message' -AllowEmpty:(-not $prompt.enabled)
     Assert-FactoryText $prompt.buttonRightText 'app.psadt.completionPrompt.buttonRightText'
 
-    Assert-FactoryObject $config.intune @('displayName','description','installContext','detection','icon') 'app.intune'
+    Assert-FactoryObject $config.intune @('displayName','description','installContext','detection','icon','informationUrl','upload') 'app.intune' @('displayName','description','installContext','detection','icon')
+    if ('informationUrl' -in $config.intune.PSObject.Properties.Name) {
+        Assert-FactoryText $config.intune.informationUrl 'app.intune.informationUrl' -AllowEmpty
+        $informationUri = $null
+        if ($config.intune.informationUrl -and (-not [uri]::TryCreate($config.intune.informationUrl, [UriKind]::Absolute, [ref]$informationUri) -or $informationUri.Scheme -ne 'https' -or $informationUri.UserInfo)) { throw 'app.intune.informationUrl must be an HTTPS URL without credentials, or empty.' }
+    }
+    if ('upload' -in $config.intune.PSObject.Properties.Name) { Assert-FactoryUploadConfig $config.intune.upload }
     Assert-FactoryText $config.intune.displayName 'app.intune.displayName'
     Assert-FactoryText $config.intune.description 'app.intune.description' -AllowEmpty
     if ($config.intune.installContext -notin @('system','user')) { throw 'app.intune.installContext must be system or user.' }
@@ -177,7 +183,17 @@ function Read-FactoryConfig {
     }
     if ($null -ne $config.intune.detection) {
         $detection = $config.intune.detection
+        Assert-FactoryText $detection.type 'app.intune.detection.type'
         switch ($detection.type) {
+            'powershell' {
+                Assert-FactoryObject $detection @('type','scriptPath','runAs32Bit','enforceSignatureCheck') 'app.intune.detection'
+                Assert-FactoryText $detection.scriptPath 'app.intune.detection.scriptPath'
+                $null = Get-FactoryPath $PSScriptRoot $detection.scriptPath
+                if ([IO.Path]::GetExtension($detection.scriptPath) -ine '.ps1') { throw 'Detection scriptPath must be a relative .ps1 path inside the application version directory.' }
+                foreach ($field in @('runAs32Bit','enforceSignatureCheck')) {
+                    if ($detection.$field -isnot [bool]) { throw "app.intune.detection.$field must be a JSON boolean." }
+                }
+            }
             'msi' {
                 Assert-FactoryObject $detection @('type','productCode') 'app.intune.detection'
                 if ($detection.productCode -notmatch '^\{[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\}$' -or [guid]$detection.productCode -eq [guid]::Empty) { throw 'MSI detection requires a nonzero productCode GUID in braces.' }
@@ -187,12 +203,83 @@ function Read-FactoryConfig {
                 foreach ($field in @('path','file','version')) { Assert-FactoryText $detection.$field "app.intune.detection.$field" }
             }
             'registry' {
-                Assert-FactoryObject $detection @('type','key','valueName','value') 'app.intune.detection'
+                Assert-FactoryObject $detection @('type','key','valueName','value','operationType','operator','check32BitOn64System') 'app.intune.detection' @('type','key','valueName','value')
                 Assert-FactoryText $detection.key 'app.intune.detection.key'
                 foreach ($field in @('valueName','value')) { Assert-FactoryText $detection.$field "app.intune.detection.$field" -AllowEmpty }
+                Assert-FactoryRegistryDetectionOptions $detection
             }
-            default { throw 'app.intune.detection.type must be msi, file or registry; use detection: null for no detection metadata.' }
+            default { throw 'app.intune.detection.type must be msi, file, registry or powershell; use detection: null for no detection metadata.' }
         }
     }
     return $config
+}
+
+function Assert-FactoryUploadConfig($Upload) {
+    $label = 'app.intune.upload'
+    Assert-FactoryObject $Upload @('deployMode','minimumSupportedWindowsRelease','restartBehavior','returnCodes','transport') $label @('deployMode','minimumSupportedWindowsRelease','restartBehavior')
+    Assert-FactoryText $Upload.deployMode "$label.deployMode"
+    Assert-FactoryText $Upload.restartBehavior "$label.restartBehavior"
+    if ($Upload.deployMode -notin @('Silent','NonInteractive','Interactive')) { throw "$label.deployMode must be Silent, NonInteractive or Interactive." }
+    if ($Upload.minimumSupportedWindowsRelease -isnot [string] -or $Upload.minimumSupportedWindowsRelease -notmatch '^(Windows11_)?[0-9]{2}H[12]$') { throw "$label.minimumSupportedWindowsRelease must use Graph release notation, for example Windows11_24H2." }
+    if ($Upload.restartBehavior -notin @('basedOnReturnCode','suppress','allow','force')) { throw "$label.restartBehavior must be basedOnReturnCode, suppress, allow or force." }
+    if ('returnCodes' -in $Upload.PSObject.Properties.Name) {
+        if ($Upload.returnCodes -isnot [array] -or $Upload.returnCodes.Count -eq 0) { throw "$label.returnCodes must be a nonempty array." }
+        $seen = @{}
+        foreach ($entry in $Upload.returnCodes) {
+            Assert-FactoryObject $entry @('returnCode','type') "$label.returnCodes[]"
+            Assert-FactoryText $entry.type "$label.returnCodes[].type"
+            if (($entry.returnCode -isnot [int] -and $entry.returnCode -isnot [long]) -or $entry.returnCode -lt [int]::MinValue -or $entry.returnCode -gt [int]::MaxValue) { throw "$label.returnCodes[].returnCode must be a 32-bit integer." }
+            if ($entry.type -notin @('success','softReboot','hardReboot','retry','failed')) { throw "$label.returnCodes[].type is invalid." }
+            if ($seen.ContainsKey([string]$entry.returnCode)) { throw "$label.returnCodes contains a duplicate returnCode." }
+            $seen[[string]$entry.returnCode] = $true
+        }
+    }
+    if ('transport' -in $Upload.PSObject.Properties.Name) {
+        Assert-FactoryObject $Upload.transport @('maxRetries','blockSizeBytes','sasRenewalThresholdMinutes','timeoutSeconds') "$label.transport"
+        $ranges = @{maxRetries=@(0,10);blockSizeBytes=@(1MB,16MB);sasRenewalThresholdMinutes=@(1,30);timeoutSeconds=@(1,7200)}
+        foreach ($name in $ranges.Keys) {
+            $value = $Upload.transport.$name
+            if (($value -isnot [int] -and $value -isnot [long]) -or $value -lt $ranges[$name][0] -or $value -gt $ranges[$name][1]) { throw "$label.transport.$name must be an integer between $($ranges[$name][0]) and $($ranges[$name][1])." }
+        }
+    }
+}
+
+function Assert-FactoryRegistryDetectionOptions($Detection) {
+    $fields = @($Detection.PSObject.Properties.Name)
+    if (('operationType' -in $fields) -xor ('operator' -in $fields)) { throw 'Registry detection requires operationType and operator together.' }
+    if ('check32BitOn64System' -in $fields -and $Detection.check32BitOn64System -isnot [bool]) { throw 'Registry detection.check32BitOn64System must be a JSON boolean.' }
+    if ('operationType' -notin $fields) { return }
+    Assert-FactoryText $Detection.operationType 'app.intune.detection.operationType'
+    Assert-FactoryText $Detection.operator 'app.intune.detection.operator'
+    if ($Detection.operationType -notin @('exists','doesNotExist','string','integer','version')) { throw 'Registry detection.operationType is invalid.' }
+    if ($Detection.operationType -in @('exists','doesNotExist')) {
+        if ($Detection.operator -ne 'notConfigured' -or $Detection.value -ne '') { throw 'Registry existence detection requires operator notConfigured and an empty value.' }
+    } else {
+        if ($Detection.operator -notin @('equal','notEqual','greaterThan','greaterThanOrEqual','lessThan','lessThanOrEqual')) { throw 'Registry detection.operator is invalid.' }
+        if ($Detection.operationType -eq 'string' -and $Detection.operator -notin @('equal','notEqual')) { throw 'Registry string detection supports equal or notEqual.' }
+        $version = $null; $number = 0L
+        if ($Detection.operationType -eq 'version' -and -not [version]::TryParse($Detection.value, [ref]$version)) { throw 'Registry version detection requires a dotted numeric value.' }
+        if ($Detection.operationType -eq 'integer' -and -not [long]::TryParse($Detection.value, [ref]$number)) { throw 'Registry integer detection requires an integer value encoded as a JSON string.' }
+    }
+}
+
+function Read-FactoryDetectionScript([string]$Path) {
+    Assert-FactoryNoLinks $Path
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Detection script not found: '$Path'." }
+    # A factory guard, not an Intune service limit. Never execute the script here.
+    if ((Get-Item -LiteralPath $Path).Length -gt 1MB) { throw 'Detection script exceeds the factory limit of 1 MiB.' }
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    try { $source = [Text.UTF8Encoding]::new($false, $true).GetString($bytes).TrimStart([char]0xFEFF) }
+    catch { throw 'Detection script must be saved as UTF-8 (preferably with BOM).' }
+    if ([string]::IsNullOrWhiteSpace($source)) { throw 'Detection script must not be empty.' }
+    $tokens = $null; $parseErrors = $null
+    $null = [Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors) { throw "Detection script has PowerShell syntax errors: $($parseErrors[0].Message)" }
+    return ,$bytes
+}
+
+function Get-FactoryBytesHash([byte[]]$Bytes) {
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    try { return [BitConverter]::ToString($hasher.ComputeHash($Bytes)).Replace('-', '') }
+    finally { $hasher.Dispose() }
 }

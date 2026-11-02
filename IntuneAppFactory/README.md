@@ -70,7 +70,7 @@ Only `Package/` is deployment content. The JSON snapshots and Intune metadata st
 
 ## Application JSON
 
-Use [apps/7zip/26.05/app.json](apps/7zip/26.05/app.json) as the complete example. Every field listed below is required, even for disabled features. Missing settings and unknown properties fail validation; the factory supplies no silent deployment defaults. Conditional installer selectors and detection fields are the exceptions: include only the fields applicable to the selected type.
+Use [apps/7zip/26.05/app.json](apps/7zip/26.05/app.json) as the basic example, or [examples/notepadplusplus.app.json](examples/notepadplusplus.app.json) for explicit upload settings. Root and PSADT fields listed below are required, even for disabled features. Missing required settings and unknown properties fail validation. Conditional installer selectors and detection fields apply only to their selected type. The additional `intune.informationUrl` and `intune.upload` fields are optional for compatibility with existing applications; upload defaults and overrides are documented in [UPLOADING.md](UPLOADING.md).
 
 The toolkit's own `Config/`, `Strings/`, and other resources are copied unchanged. This JSON controls the deployment settings exposed by the generator; it is not a replacement for every internal PSADT configuration option.
 
@@ -137,6 +137,8 @@ Countdown and deferral counts accept integers from 0 to 86400; enabled deferrals
 
 Deployment mode is supplied exclusively on the launcher command line; `psadt.deployMode` is not accepted in JSON. The generator does not supply or override it. If omitted on the command line, the original toolkit's native default handling applies. PSADT may adjust the effective mode for the target session.
 
+For Intune publishing, `intune.upload.deployMode` can save the mode that the uploader appends to those launcher command lines. It does not change the generated script's native parameters or add a runtime JSON dependency.
+
 Specify the desired mode when running the launcher, for example:
 
 ```text
@@ -149,11 +151,13 @@ Generated management command strings leave the mode unspecified so you can choos
 
 ### Intune metadata
 
-All fields must be present: `displayName`, `description`, `installContext`, `detection`, and `icon`.
+The required fields are `displayName`, `description`, `installContext`, `detection`, and `icon`. Optional fields are `informationUrl` and `upload`.
 
 - `installContext`: `system` or `user`. Also maps to the native `RequireAdmin` value.
 - `icon`: PNG path relative to `apps/<AppId>/`, or `""` for no publishing icon. A configured file must exist at build time. PSADT UI assets remain separate.
-- `detection`: `null` for no detection metadata, or an object with one of these exact field sets: MSI (`type`, `productCode`); file (`type`, `path`, `file`, `version`); registry (`type`, `key`, `valueName`, `value`). Registry value name/value may be empty strings.
+- `detection`: `null` for no detection metadata, or an object with these required fields: MSI (`type`, `productCode`); file (`type`, `path`, `file`, `version`); registry (`type`, `key`, `valueName`, `value`); PowerShell (`type: "powershell"`, `scriptPath`, `runAs32Bit`, `enforceSignatureCheck`). The PowerShell path is relative to the application version directory; the builder snapshots the script for uploading. Registry value name/value may be empty strings. Registry rules additionally accept `operationType` and `operator` together, and optional boolean `check32BitOn64System`. See [PowerShell detection scripts](UPLOADING.md#powershell-detection-scripts) for an example, and the upload guide for registry version comparisons and supported operations.
+- `informationUrl`: optional HTTPS information page URL, or `""` to omit it. This does not download an installer.
+- `upload`: optional object requiring `deployMode`, `minimumSupportedWindowsRelease`, and `restartBehavior`. Optional `returnCodes` replaces the derived Intune return-code list; optional `transport` sets upload retry, chunk, SAS-renewal and wait settings. See the complete [Notepad++ JSON example](examples/notepadplusplus.app.json) and [configuration guide](UPLOADING.md#configure-uploading-in-appjson).
 
 This metadata is recorded for publishing. The separate uploader maps it to Intune detection rules and can optionally assign the published app to one group. The 7-Zip example's detection still needs validation against the approved installer; preview validates its shape, not its behavior on a device.
 

@@ -37,6 +37,11 @@ foreach ($relativePath in $payloadPaths) {
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Installer file not found: '$source'. Supply the vendor file under this version's installers directory." }
 }
 $iconPath = $null
+$detectionBytes = $null
+if ($config.intune.detection.type -eq 'powershell') {
+    $detectionPath = Get-FactoryPath $versionRoot $config.intune.detection.scriptPath
+    $detectionBytes = Read-FactoryDetectionScript $detectionPath
+}
 if ($config.intune.icon) {
     $iconPath = Get-FactoryPath $appRoot $config.intune.icon
     Assert-FactoryNoLinks $iconPath
@@ -117,6 +122,12 @@ try {
         $icon = 'icon.png'
     }
     $installCommand = 'Invoke-AppDeployToolkit.exe -DeploymentType Install'
+    $detectionScript = $null
+    if ($null -ne $detectionBytes) {
+        New-Item -ItemType Directory -Path (Join-Path $stage 'Detection') | Out-Null
+        [IO.File]::WriteAllBytes((Join-Path $stage 'Detection/Detect.ps1'), $detectionBytes)
+        $detectionScript = [ordered]@{ path = 'Detection/Detect.ps1'; sha256 = Get-FactoryBytesHash $detectionBytes }
+    }
     $uninstallCommand = 'Invoke-AppDeployToolkit.exe -DeploymentType Uninstall'
     $buildMetadata = [ordered]@{
         factory = 'IntuneAppFactory'; appName = $AppName; version = $Version; revision = $config.revision
@@ -125,6 +136,7 @@ try {
         repairCommand = 'Invoke-AppDeployToolkit.exe -DeploymentType Repair'
         icon = $icon; intune = $config.intune
     }
+    if ($detectionScript) { $buildMetadata.detectionScript = $detectionScript }
     $buildMetadata | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $stage 'build.json') -Encoding UTF8
 
     # Publish only after staging succeeds. Keep the previous package until the swap succeeds.
