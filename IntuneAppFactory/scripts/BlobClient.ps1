@@ -40,14 +40,21 @@ function New-FactoryBlobClient([string]$Uri) {
 }
 
 function Invoke-FactoryBlobOperation {
-    param([scriptblock]$Operation, [ValidateRange(0,10)][int]$MaxRetries, [string]$Name)
+    param([scriptblock]$Operation, [ValidateRange(0,10)][int]$MaxRetries, [string]$Name,
+        [scriptblock]$BeforeAttempt, [scriptblock]$RetryExpiredSas)
     for ($attempt = 0; $attempt -le $MaxRetries; $attempt++) {
+        # Graph renewal failures retain their own diagnostics, outside the storage catch.
+        if ($BeforeAttempt) { & $BeforeAttempt }
         try { return (& $Operation) }
         catch {
             $exception = $_.Exception
-            while ($exception.InnerException) { $exception = $exception.InnerException }
-            $status = $exception.RequestInformation.HttpStatusCode
-            if ($status -and [int]$status -notin @(408,429,500,502,503,504)) {
+            $status = $null
+            while ($exception) {
+                if ($exception.RequestInformation.HttpStatusCode) { $status = $exception.RequestInformation.HttpStatusCode; break }
+                $exception = $exception.InnerException
+            }
+            $expired = $status -eq 403 -and $RetryExpiredSas -and (& $RetryExpiredSas)
+            if ($status -and [int]$status -notin @(408,429,500,502,503,504) -and -not $expired) {
                 throw "Azure Blob $Name failed (HTTP $status); SAS details omitted."
             }
             if ($attempt -ge $MaxRetries) { throw "Azure Blob $Name failed after $($MaxRetries + 1) attempts (HTTP $status); SAS details omitted." }

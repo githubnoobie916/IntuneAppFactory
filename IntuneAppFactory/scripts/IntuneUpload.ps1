@@ -88,6 +88,12 @@ function Send-FactoryEncryptedContent {
         [ValidateRange(0,10)][int]$MaxRetries = 3,
         [ValidateRange(1,30)][int]$SasRenewalThresholdMinutes = 3
     )
+    $transfer = @{Location=$Location;Client=$null}
+    $prepareAttempt = {
+        $transfer.Location = Update-FactoryUploadLocation $FileUri $transfer.Location $TimeoutSeconds -SasRenewalThresholdMinutes $SasRenewalThresholdMinutes
+        $transfer.Client = New-FactoryBlobClient $transfer.Location.azureStorageUri
+    }
+    $expiredSas = { [DateTimeOffset]::Parse($transfer.Location.azureStorageUriExpirationDateTime) -le [DateTimeOffset]::UtcNow }
     $archive = [IO.Compression.ZipFile]::OpenRead($Path)
     try {
         $entry = $archive.GetEntry('IntuneWinPackage/Contents/IntunePackage.intunewin')
@@ -106,26 +112,20 @@ function Send-FactoryEncryptedContent {
                 }
                 if ($count -eq 0) { throw 'Unexpected end of encrypted content.' }
                 if ($blocks.Count -ge 50000) { throw 'Encrypted content exceeds the block upload limit.' }
-                $Location = Update-FactoryUploadLocation $FileUri $Location $TimeoutSeconds -SasRenewalThresholdMinutes $SasRenewalThresholdMinutes
-                $client = New-FactoryBlobClient $Location.azureStorageUri
                 $block = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($blocks.Count.ToString('D8')))
                 $memory = [IO.MemoryStream]::new($buffer, 0, $count, $false, $true)
                 try {
-                    Invoke-FactoryBlobOperation -Name 'PutBlock' -MaxRetries $MaxRetries -Operation {
+                    Invoke-FactoryBlobOperation -Name 'PutBlock' -MaxRetries $MaxRetries -BeforeAttempt $prepareAttempt -RetryExpiredSas $expiredSas -Operation {
                         $memory.Position = 0
-                        $client.PutBlock($block, $memory, $null)
+                        $transfer.Client.PutBlock($block, $memory, $null)
                     }
                 } finally { $memory.Dispose() }
                 $blocks.Add($block); $total += $count
                 Write-Progress -Activity 'Uploading encrypted Intune content' -Status "$total / $($entry.Length) bytes" -PercentComplete (100 * $total / $entry.Length)
             }
-            $Location = Update-FactoryUploadLocation $FileUri $Location $TimeoutSeconds -SasRenewalThresholdMinutes $SasRenewalThresholdMinutes
-            $client = New-FactoryBlobClient $Location.azureStorageUri
-            Invoke-FactoryBlobOperation -Name 'PutBlockList' -MaxRetries $MaxRetries -Operation { $client.PutBlockList($blocks) }
-            $Location = Update-FactoryUploadLocation $FileUri $Location $TimeoutSeconds -SasRenewalThresholdMinutes $SasRenewalThresholdMinutes
-            $client = New-FactoryBlobClient $Location.azureStorageUri
-            Invoke-FactoryBlobOperation -Name 'FetchAttributes' -MaxRetries $MaxRetries -Operation { $client.FetchAttributes() }
-            if ($client.Properties.Length -ne $entry.Length) { throw "Uploaded blob size mismatch: expected $($entry.Length), received $($client.Properties.Length). Content was not committed to Intune." }
+            Invoke-FactoryBlobOperation -Name 'PutBlockList' -MaxRetries $MaxRetries -BeforeAttempt $prepareAttempt -RetryExpiredSas $expiredSas -Operation { $transfer.Client.PutBlockList($blocks) }
+            Invoke-FactoryBlobOperation -Name 'FetchAttributes' -MaxRetries $MaxRetries -BeforeAttempt $prepareAttempt -RetryExpiredSas $expiredSas -Operation { $transfer.Client.FetchAttributes() }
+            if ($transfer.Client.Properties.Length -ne $entry.Length) { throw "Uploaded blob size mismatch: expected $($entry.Length), received $($transfer.Client.Properties.Length). Content was not committed to Intune." }
         } finally { $stream.Dispose(); Write-Progress -Activity 'Uploading encrypted Intune content' -Completed }
     } finally { $archive.Dispose() }
 }

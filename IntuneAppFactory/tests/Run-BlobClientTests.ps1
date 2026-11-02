@@ -6,6 +6,17 @@ $ErrorActionPreference = 'Stop'
 Import-FactoryBlobClient
 Import-FactoryBlobClient
 Write-Host 'PASS Dependency loading is repeatable in the same PowerShell session.'
+$requestResult = [Microsoft.Azure.Storage.RequestResult]::new()
+$requestResult.HttpStatusCode = 403
+$storageFailure = [Microsoft.Azure.Storage.StorageException]::new($requestResult, 'SAS must not be echoed', [Exception]::new('inner transport failure'))
+$attempts = @{Count=0}
+try {
+    Invoke-FactoryBlobOperation -Name 'PutBlock' -MaxRetries 2 -Operation { $attempts.Count++; throw $storageFailure }
+    throw 'Expected storage failure.'
+} catch {
+    if ($attempts.Count -ne 1 -or $_.Exception.Message -notmatch 'HTTP 403' -or $_.Exception.Message -match 'SAS must not') { throw 'Nested permanent storage error was retried or lost its sanitized HTTP status.' }
+}
+Write-Host 'PASS Nested SDK storage errors preserve HTTP status and permanent failures are not retried.'
 Add-Type -TypeDefinition @'
 using System;
 using System.IO;

@@ -33,6 +33,10 @@ function New-TestBlobClient($Probe, [string]$Uri) {
         $this.Probe.Positions.Add($Stream.Position)
         if ($this.Probe.FailFirstBlock -and $this.Probe.Attempts -eq 1) {
             $null = $Stream.ReadByte()
+            if ($this.Probe.LocationToExpire) {
+                $this.Probe.LocationToExpire.azureStorageUriExpirationDateTime = [DateTimeOffset]::UtcNow.AddMinutes(-1).ToString('o')
+                throw $this.Probe.ExpiredSasException
+            }
             throw 'Simulated transient failure after consuming part of the block.'
         }
         $copy = [IO.MemoryStream]::new()
@@ -371,6 +375,35 @@ try {
         $location = @{azureStorageUri='https://test.blob.core.windows.net/c/b?sig=redacted';azureStorageUriExpirationDateTime=[DateTimeOffset]::UtcNow.AddHours(1).ToString('o')}
         Assert-Throws { Send-FactoryEncryptedContent -Path $archivePath -FileUri '/test' -Location $location -MaxRetries 0 } 'size|length'
         Assert-True ($probe.BlockLists.Count -eq 1 -and $probe.Fetches -eq 1) 'Blob size was not checked after committing blocks.'
+    }
+    Test-Case 'A SAS that expires during a block attempt is renewed before replaying the full block' {
+        Add-Type -TypeDefinition @'
+public class FactoryTestStorageResponse { public int HttpStatusCode { get; set; } = 403; }
+public class FactoryTestExpiredSasException : System.Exception {
+    public FactoryTestStorageResponse RequestInformation { get; } = new FactoryTestStorageResponse();
+}
+'@
+        $location = @{azureStorageUri='https://test.blob.core.windows.net/c/b?sig=old';azureStorageUriExpirationDateTime=[DateTimeOffset]::UtcNow.AddHours(1).ToString('o')}
+        $probe = New-TestBlobProbe
+        $probe.FailFirstBlock = $true
+        $probe.LocationToExpire = $location
+        $probe.ExpiredSasException = [FactoryTestExpiredSasException]::new()
+        $renewalProbe = @{Renewals=0}
+        function New-FactoryBlobClient($Uri) { New-TestBlobClient $probe $Uri }
+        function Start-Sleep { }
+        function Invoke-FactoryGraph($Method='GET', $Uri, $Body) {
+            if ($Method -eq 'POST' -and $Uri -eq '/test/renewUpload') { $renewalProbe.Renewals++; return }
+            if ($Method -eq 'GET' -and $Uri -eq '/test') {
+                return @{uploadState='azureStorageUriRenewalSuccess';azureStorageUri='https://test.blob.core.windows.net/c/b?sig=renewed';azureStorageUriExpirationDateTime=[DateTimeOffset]::UtcNow.AddHours(1).ToString('o')}
+            }
+            throw "Unexpected renewal operation: $Method $Uri"
+        }
+        Send-FactoryEncryptedContent -Path $archivePath -FileUri '/test' -Location $location -MaxRetries 1
+        Assert-True ($renewalProbe.Renewals -eq 1) 'An expired SAS was not renewed exactly once during the retry.'
+        Assert-True ($probe.Clients[0] -match 'sig=old$' -and $probe.Clients[1] -match 'sig=renewed$') 'Retry did not rebuild the client with the renewed SAS.'
+        Assert-True ($probe.Attempts -eq 3 -and $probe.Positions[0] -eq 0 -and $probe.Positions[1] -eq 0) 'Retry did not rewind the partially consumed block.'
+        Assert-True ($probe.Blocks[0].Bytes.Length -eq 4MB -and $probe.Blocks[0].Bytes[0] -eq 42 -and $probe.Blocks[0].Uri -match 'sig=renewed$' -and $probe.Blocks[1].Bytes[-1] -eq 99) 'Renewal replay changed the encrypted payload.'
+        Assert-True ($probe.BlockLists.Count -eq 1 -and $probe.Fetches -eq 1) 'Renewed upload did not complete size verification.'
     }
     Test-Case 'Renewed storage credentials rebuild the Blob client for subsequent operations' {
         $probe = New-TestBlobProbe
