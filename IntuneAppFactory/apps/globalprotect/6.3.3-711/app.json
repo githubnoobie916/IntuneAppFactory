@@ -1,0 +1,151 @@
+{
+  "name": "GlobalProtect VPN",
+  "publisher": "Palo Alto Networks",
+  "version": "6.3.3-711",
+  "architecture": "x64",
+  "language": "EN",
+  "revision": "01",
+  "install": [
+    {
+      "type": "MSI",
+      "path": "GlobalProtect.msi",
+      "arguments": "/passive PORTAL=ccsf-vpn.sf.gov CONNECTMETHOD=on-demand"
+    }
+  ],
+  "uninstall": [
+    {
+      "type": "MSI",
+      "path": "GlobalProtect.msi",
+      "arguments": "/passive /uninstall"
+    }
+  ],
+  "repair": [
+    {
+      "type": "MSI",
+      "path": "GlobalProtect.msi",
+      "arguments": "/repair"
+    }
+  ],
+  "additionalFiles": [],
+  "psadt": {
+    "processesToClose": [
+      {
+        "name": "pangps",
+        "description": "GlobalProtect Service"
+      },
+      {
+        "name": "pangpa",
+        "description": "GlobalProtect Client"
+      }
+    ],
+    "closeProcesses": false,
+    "closeProcessesCountdown": 60,
+    "allowDefer": true,
+    "deferTimes": 3,
+    "checkDiskSpace": true,
+    "persistPrompt": true,
+    "suppressRebootPassThru": false,
+    "terminalServerMode": false,
+    "disableLogging": false,
+    "scriptAuthor": "IntuneAppFactory",
+    "scriptVersion": "1.0.0",
+    "scriptDate": "2026-11-02",
+    "successExitCodes": [
+      0,
+      1707
+    ],
+    "rebootExitCodes": [
+      1641,
+      3010
+    ],
+    "installName": "GlobalProtect VPN",
+    "installTitle": "GlobalProtect VPN",
+    "completionPrompt": {
+      "enabled": true,
+      "message": "GlobalProtect VPN installation completed.",
+      "buttonRightText": "OK",
+      "noWait": true
+    }
+  },
+  "intune": {
+    "displayName": "GlobalProtect VPN",
+    "description": "VPN client. Service provided by Department of Technology.",
+    "informationUrl": "https://docs.paloaltonetworks.com/globalprotect/getting-started/globalprotect-overview",
+    "installContext": "system",
+    "icon": "GlobalProtect-icon.png",
+    "detection": {
+      "type": "powershell",
+      "scriptPath": "detection/detectionscript.ps1",
+      "runAs32Bit": false,
+      "enforceSignatureCheck": false
+    },
+    "upload": {
+      "deployMode": "Auto",
+      "minimumSupportedWindowsRelease": "1809",
+      "restartBehavior": "allow",
+      "returnCodes": [
+        {
+          "returnCode": 0,
+          "type": "success"
+        },
+        {
+          "returnCode": 1707,
+          "type": "success"
+        },
+        {
+          "returnCode": 3010,
+          "type": "softReboot"
+        },
+        {
+          "returnCode": 1641,
+          "type": "hardReboot"
+        },
+        {
+          "returnCode": 1618,
+          "type": "retry"
+        },
+        {
+          "returnCode": 60001,
+          "type": "failed"
+        },
+        {
+          "returnCode": 60008,
+          "type": "failed"
+        },
+        {
+          "returnCode": 60010,
+          "type": "failed"
+        },
+        {
+          "returnCode": 60011,
+          "type": "failed"
+        },
+        {
+          "returnCode": 1602,
+          "type": "retry"
+        }
+      ],
+      "transport": {
+        "maxRetries": 10,
+        "blockSizeBytes": 4194304,
+        "sasRenewalThresholdMinutes": 5,
+        "timeoutSeconds": 900
+      },
+      "maxRunTimeInMinutes": 15,
+      "minimumFreeDiskSpaceInMB": 500,
+      "minimumMemoryInMB": 0,
+      "minimumNumberOfProcessors": 0,
+      "minimumCpuSpeedInMHz": 0
+    },
+    "displayVersion": "6.3.3-711",
+    "developer": "Palo Alto Networks",
+    "owner": "",
+    "privacyInformationUrl": "",
+    "notes": "",
+    "isFeatured": false,
+    "allowAvailableUninstall": true,
+    "categoryIds": [],
+    "roleScopeTagIds": []
+  },
+  "notes": "Upload settings follow the working GlobalProtect reference. Supply the approved GlobalProtect.msi locally. categoryIds and roleScopeTagIds are tenant-specific; populate them before building if required. Detection checks product {CD809CD6-9D01-417E-9E76-D19EEE77E74F} and version 6.3.3; validate against the approved installer."
+}

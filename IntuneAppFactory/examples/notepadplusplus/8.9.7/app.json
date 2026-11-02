@@ -54,7 +54,7 @@
       "check32BitOn64System": false
     },
     "upload": {
-      "deployMode": "Silent",
+      "deployMode": "Auto",
       "minimumSupportedWindowsRelease": "Windows11_24H2",
       "restartBehavior": "suppress",
       "returnCodes": [

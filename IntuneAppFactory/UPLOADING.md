@@ -1,8 +1,8 @@
 # Upload a generated Win32 app to Intune
 
-`scripts/Upload-IntuneWin.ps1` adds publishing after the existing generation and packaging commands. It creates a **new** Win32 app using Microsoft Graph v1.0, uploads the encrypted payload from the archive, verifies publication, and optionally assigns one group.
+`scripts/Upload-IntuneWin.ps1` adds publishing after the existing generation and packaging commands. It creates a **new** Win32 app using Microsoft Graph beta, uploads the encrypted payload from the archive, verifies publication, and optionally assigns one group.
 
-The linked Admin365 article could not be retrieved during implementation. The eight stages below describe this project's implementation based on Microsoft's documentation; they are not a verified reproduction of the article's numbered steps.
+Publishing follows the working `sources/deployapp-globalprotect.ps1` reference: Graph beta, CloudBlockBlob block uploads, blob-size verification, encrypted file commit, and content-version publication. The reference remains read-only. The factory creates one content version, provides its own dependency setup and SAS-renewal helper, and bounds waits and retries.
 
 ## PowerShell detection scripts
 
@@ -43,9 +43,9 @@ Build a new revision and package it as usual, then preview the upload. The build
 | 3. Create the app | Check for an existing display name, then create a Win32 app with commands, requirements, detection, exit codes, and optional PNG icon. |
 | 4. Create a content version | Create the content container under the new app. |
 | 5. Create the content file | Submit original/encrypted sizes and wait for Intune to issue an Azure Storage upload URL. |
-| 6. Upload content | Stream the **inner encrypted payload** in configurable blocks (4 MiB by default), and commit the ordered block list. Renew the SAS URL near expiration. |
+| 6. Upload content | Stream the **inner encrypted payload** in configurable blocks (4 MiB by default), and commit the ordered block list. Renew the SAS URL near expiration before every attempt, including retries. Verify the committed blob length before submitting the file commit to Intune. |
 | 7. Commit and verify | Submit encryption metadata from `Detection.xml`, wait for `commitFileSuccess`, set `committedContentVersion`, then wait for `published`. |
-| 8. Assign optionally and record | If requested, assign one group after publication. Save the app/content/file IDs, package hash, stage, and assignment result in a local receipt. |
+| 8. Assign optionally and record | If requested, assign one group after publication. Apply and verify configured categories, optionally assign a group, and save IDs, package hash, publication status, stage, and operation results in a local receipt. |
 
 ## Configure uploading in app.json
 
@@ -89,7 +89,7 @@ For example, the `intune` section can be:
     "check32BitOn64System": false
   },
   "upload": {
-    "deployMode": "Silent",
+    "deployMode": "Auto",
     "minimumSupportedWindowsRelease": "Windows11_24H2",
     "restartBehavior": "suppress",
     "returnCodes": [
@@ -110,7 +110,7 @@ For example, the `intune` section can be:
 
 This is a section of the application JSON, not a standalone complete config. JSON requires doubled backslashes in Windows paths, double quotes, numbers such as `4194304` instead of expressions such as `4 * 1024 * 1024`, and lowercase booleans. The uploader supplies Graph's `@odata.type` and `ruleType`; do not paste raw Graph rule objects into this schema.
 
-`upload` is optional. When present, its first three settings are required. `-DeployMode`, `-MinimumSupportedWindowsRelease`, `-RestartBehavior`, and `-TimeoutSeconds` override their corresponding saved values only when explicitly supplied. For an older JSON without `upload`, continue supplying the first three command parameters. Preview shows the resolved app body and `Transport` settings.
+`upload` is optional. When present, `minimumSupportedWindowsRelease` and `restartBehavior` are required. `deployMode` is optional and defaults to `Auto`. `-DeployMode`, `-MinimumSupportedWindowsRelease`, `-RestartBehavior`, and `-TimeoutSeconds` override their corresponding saved values only when explicitly supplied. For an older JSON without `upload`, supply the Windows release and restart behavior on the command line; deployment mode still defaults to `Auto`. Explicit CLI mode takes precedence over JSON, and explicit JSON mode takes precedence over the default. Preview shows the resolved app body and `Transport` settings.
 
 `returnCodes` is optional: omitted means the existing PSADT-derived mapping; supplied means use **exactly** that nonempty list without adding other codes. Valid types are `success`, `softReboot`, `hardReboot`, `retry`, and `failed`; duplicate integer codes are rejected. These mappings describe the exit codes returned by the PSADT launcher. Keep the PSADT success/reboot behavior and Intune mappings consistent with your actual deployment.
 
@@ -118,10 +118,10 @@ This is a section of the application JSON, not a standalone complete config. JSO
 
 | Field | Default when `transport` is omitted | Allowed values / meaning |
 | --- | --- | --- |
-| `maxRetries` | `3` | Integer 0–10. Additional Azure PUT attempts after the first; `10` allows 11 total attempts. Does not change Graph SDK retries. |
+| `maxRetries` | `3` | Integer 0–10. Additional Blob client attempts after the first; `10` allows 11 total attempts. Applies to block upload, block-list commit, and attribute reads; does not change Graph SDK retries. |
 | `blockSizeBytes` | `4194304` | Integer 1048576–16777216 (1–16 MiB). Larger chunks use more memory. The 50,000-block limit is checked before uploading. |
-| `sasRenewalThresholdMinutes` | `3` | Integer 1–30. Renew when remaining SAS lifetime is below this threshold. |
-| `timeoutSeconds` | `900` | Integer 1–7200 for each Intune state wait, not total transfer time. Individual Azure PUT timeout remains 120 seconds. |
+| `sasRenewalThresholdMinutes` | `3` | Integer 1–30. Check before each attempt and renew when remaining SAS lifetime is below this threshold. A 403 after actual SAS expiry can retry with renewed credentials within the configured retry limit. |
+| `timeoutSeconds` | `900` | Integer 1–7200 for each Intune state wait, not total transfer time. Each Blob SDK operation has a 120-second maximum execution time. |
 
 Registry `operationType` and `operator` must be supplied together. If omitted, existing rules retain string equality. `version` and `integer` allow `equal`, `notEqual`, `greaterThan`, `greaterThanOrEqual`, `lessThan`, or `lessThanOrEqual`; `string` supports `equal`/`notEqual`. `exists`/`doesNotExist` require `operator: "notConfigured"` and `value: ""`. The value is always a JSON string, including integer comparisons. Omitting `check32BitOn64System` retains the architecture-based behavior; explicitly specifying `false` is respected.
 
@@ -144,6 +144,8 @@ No Notepad++ installer was downloaded or package published when adding this exam
 ## One-time prerequisites
 
 - PowerShell 7.2 or later on Windows, an active Intune tenant, and outbound access to Microsoft sign-in, Graph, and Azure Blob Storage.
+- Run `./scripts/Install-UploadDependencies.ps1` in PowerShell 7. This explicitly downloads the hash-pinned Blob client and supporting assemblies from NuGet into `tools/BlobClient-11.2.3`. Publishing never installs dependencies automatically; preview requires neither these assemblies nor Graph authentication. The setup script can be rerun to repair missing or changed dependencies.
+- The working reference uses **Microsoft.Azure.Storage.Blob 11.2.3**, a legacy SDK that Microsoft no longer maintains. This implementation deliberately retains that API for compatibility with the proven workflow. Versions and package/DLL hashes are recorded in `scripts/BlobClient.dependencies.json`; this is a compatibility choice, not a claim that the library is currently maintained. See the [Microsoft package notice](https://www.nuget.org/packages/Microsoft.Azure.Storage.Blob/11.2.3). SDK modernization should be validated separately against the same upload tests and a pilot tenant.
 - Install the Microsoft authentication module in PowerShell 7 if it is not already available:
 
   ```powershell
@@ -178,7 +180,7 @@ $plan | ConvertTo-Json -Depth 20
 .\scripts\Upload-IntuneWin.ps1 @upload -WhatIf
 ```
 
-The Windows release above is an example requirement, not a recommendation for your device fleet. Choose the supported release appropriate to your organization, in Graph's notation (for example `Windows11_23H2`; Windows 10 releases use `22H2` notation). Release support is validated by Intune. The release, deployment mode, and restart behavior must be chosen either in `intune.upload` or on the command line. Interactive PSADT UI needs testing in the actual Intune execution context; use the mode appropriate to your deployment.
+The Windows release above is an example requirement, not a recommendation for your device fleet. Choose the supported release appropriate to your organization, in Graph's notation (for example `Windows11_23H2`; Windows 10 releases use `22H2` notation). Release values are checked locally against the shared release list in AppConfig.ps1; Intune remains authoritative for service support. The release and restart behavior must be chosen either in `intune.upload` or on the command line. Deployment mode defaults to `Auto`. Interactive PSADT UI needs testing in the actual Intune execution context; use the mode appropriate to your deployment.
 
 During implementation, revision 05 was packaged locally and its upload preview verified. Its archive now exists; skip the packaging command for that unchanged revision. After editing package content, explicitly repackage with `New-IntuneWin.ps1 -Force`, then preview again.
 
@@ -226,6 +228,56 @@ An automation host can establish another supported SDK connection (for example a
 
 ## Metadata mapping
 
+### Additional JSON options
+
+The existing `intune` object accepts these optional properties. Unknown fields still fail validation. Credentials, app IDs and SAS URLs do not belong in application JSON.
+
+| JSON property | Type and behavior |
+| --- | --- |
+| `intune.displayVersion` | Nonempty string; defaults to the root `version`. |
+| `intune.developer`, `intune.owner` | Strings; explicit empty strings are accepted. |
+| `intune.notes` | String; overrides the generated factory note, including when empty. Root `notes` remains local configuration commentary. |
+| `intune.privacyInformationUrl` | HTTPS URL without credentials, or empty. `informationUrl` has the same rule. |
+| `intune.isFeatured` | Boolean; explicit `false` is submitted. |
+| `intune.allowAvailableUninstall` | Boolean; controls uninstall availability in Company Portal for available assignments. |
+| `intune.categoryIds` | Array of unique category GUID strings for the target tenant. Omitted/empty means no category operations. Categories are checked before app creation, then associated through `categories/$ref` and read back after publication. |
+| `intune.roleScopeTagIds` | Array of unique numeric ID strings, for example `["0", "12"]`. IDs refer to the target tenant. An explicit empty array is submitted; omission leaves the service default. |
+| `intune.upload.maxRunTimeInMinutes` | Integer 1–1440; installation runtime, separate from upload waiting/transport timeouts. |
+| `intune.upload.minimumFreeDiskSpaceInMB` | Integer 0–2147483647; `0` is submitted when configured. |
+| `intune.upload.minimumMemoryInMB` | Integer 0–2147483647. |
+| `intune.upload.minimumNumberOfProcessors` | Integer 0–2147483647. |
+| `intune.upload.minimumCpuSpeedInMHz` | Integer 0–2147483647. |
+
+Except for the display-version and existing factory-note defaults, omitted new properties are not submitted. Graph validates tenant-specific IDs and device requirement constraints. Preview exposes `ApiVersion: beta`, `CategoryIds`, and the planned `CategoryOperations` alongside the app body. The actual category operations occur only after the content is published. Group assignment is still an explicit CLI choice.
+
+### Windows 10, Windows 11 and Auto mode
+
+Use Graph's release strings: `"1809"` or `"22H2"` for Windows 10, and `"Windows11_24H2"` for Windows 11. Do not prefix Windows 10 values with `Windows10_`. The local allowlist currently includes Windows 10 `1607`, `1703`, `1709`, `1803`, `1809`, `1903`, `1909`, `2004`, `20H2`, `21H1`, `21H2`, `22H2`; Windows 11 `21H2`, `22H2`, `23H2`, `24H2`, `25H2`, `26H1`, `26H2` with the `Windows11_` prefix. Intune determines whether a listed release is supported by the tenant's API. Unknown values such as `Windows11_24H1` fail before sign-in. Maintain this shared allowlist when adding future releases.
+
+Omitting `deployMode` resolves to `Auto`, including when `intune.upload` is absent and the other required settings come from the command line. Supported explicit modes are `Auto`, `Silent`, `NonInteractive` and `Interactive`. A saved `Silent` value remains `Silent`. Auto uses the supplied PSADT toolkit's native session behavior; it does not guarantee a prompt in every Intune execution context.
+
+### GlobalProtect reference configuration
+
+[apps/globalprotect/6.3.3-711/app.json](apps/globalprotect/6.3.3-711/app.json) is the complete example with the new options. It uses `Auto`, Windows 10 `1809`, restart behavior `allow`, a 15-minute installation runtime, 500 MB free disk space, and the reference return codes (including `1707: success` and `1602: retry`). Hardware requirements set to zero add no minimum. Architecture remains the application's explicit `x64` setting. Populate `categoryIds` and `roleScopeTagIds` for your tenant if needed; category IDs from the source script are not copied automatically.
+
+Its application-owned detection script now reads uninstall registry registration for product `{CD809CD6-9D01-417E-9E76-D19EEE77E74F}` and exact version `6.3.3`. It avoids `Win32_Product` queries, returns code 0 with STDOUT on detection and code 1 otherwise. The reference under `sources` is unchanged. Registry registration and installer switches still require validation against your approved MSI and a pilot device.
+
+From `IntuneAppFactory`, supply `apps/globalprotect/6.3.3-711/installers/GlobalProtect.msi`, then choose an unused revision:
+
+```powershell
+.\scripts\Install-UploadDependencies.ps1
+.\scripts\Build-App.ps1 -AppName globalprotect -Version 6.3.3-711 -ValidateOnly
+.\scripts\Build-App.ps1 -AppName globalprotect -Version 6.3.3-711 -Revision 02
+# Review the generated PSADT script before packaging.
+.\scripts\New-IntuneWin.ps1 -SourcePath '.\output\globalprotect\6.3.3-711\rev-02\Package'
+$plan = .\scripts\Upload-IntuneWin.ps1 -RevisionPath '.\output\globalprotect\6.3.3-711\rev-02' -Preview
+$plan | ConvertTo-Json -Depth 20
+# Creates an unassigned app in the specified tenant:
+.\scripts\Upload-IntuneWin.ps1 -RevisionPath '.\output\globalprotect\6.3.3-711\rev-02' -TenantId '<tenant-guid>'
+```
+
+The create-new uploader will stop if the manually published app already has this display name. Review that existing app and prior receipts before retrying. A new revision is needed after changing application configuration; source edits do not alter existing revision snapshots.
+
 | Source | Published value |
 | --- | --- |
 | Revision `app.json` | Publisher, architecture (`x86`, `x64`, or `arm64`), display name, description, install context. |
@@ -244,13 +296,13 @@ Null detection is allowed during generation but rejected for publishing. Conflic
 
 ## Receipts, duplicates, and failed uploads
 
-The uploader writes `upload-<tenant-guid>.json` beside `build.json`, starting **before** app creation. It records IDs and the last attempted stage, but no tokens, SAS URLs, or encryption keys. Keep it with the package for audit and troubleshooting. `-TimeoutSeconds` (default 900) bounds each service-state wait, not the complete upload. Storage PUTs use bounded retries; Microsoft Graph request handling uses the SDK. Authorization, validation, and terminal content-state failures stop the run.
+The uploader writes `upload-<tenant-guid>.json` beside `build.json`, starting **before** app creation. It records IDs, category results, `ContentPublished`, sanitized failure details and the last attempted stage, but no tokens, SAS URLs, or encryption keys. A failure after verified publication records `Status: PublishedWithErrors` and keeps `ContentPublished: true`. Keep it with the package for audit and troubleshooting. `-TimeoutSeconds` (default 900) bounds each service-state wait, not the complete upload. Blob client operations use bounded retries; Microsoft Graph request handling uses the SDK. Authorization, validation, and terminal content-state failures stop the run. Sanitized Graph errors retain the method, path, HTTP status, error code, message, and request ID. Request bodies, SAS URLs, tokens, and encryption keys are excluded.
 
 This is a create-new uploader, not an update/resume tool. An existing receipt or an app with the same display name stops publication. The archive remains locked against replacement while uploading. The local receipt prevents concurrent runs for the same revision/tenant; display names are not globally unique constraints in Graph, so coordinate uploads from different machines.
 
 On failure:
 
-1. Read the receipt's `Stage`, `AppId`, and content IDs. A failed assignment can leave a successfully published, unassigned app.
+1. Read the receipt's `Stage`, `AppId`, and content IDs. A failed category operation or assignment can leave successfully published content. `ContentPublished: true` records this separately from the later failure; finish metadata or assignments on that app rather than uploading again.
 2. Inspect that app in Intune. After a lost response, an app/assignment may exist even if its ID was never received. Search by display name as well.
 3. Complete assignments manually when content is already published. Do not reupload just to retry assignment.
 4. If you decide to recreate an incomplete app, explicitly remove the incomplete app in Intune, preserve the receipt under a different filename, correct the cause, then rerun. Never discard a receipt before checking the tenant.
@@ -261,9 +313,13 @@ There is no automatic deletion, replacement, supersedence, rollback, or resumpti
 
 ```powershell
 .\tests\Run-UploadTests.ps1
+.\tests\Run-GraphTests.ps1
+.\tests\Run-DetectionTests.ps1
+# After installing the Blob client dependencies; real SDK against localhost only:
+.\tests\Run-BlobClientTests.ps1
 ```
 
-Tests use a synthetic archive and mocked Graph/storage boundaries. They exercise mapping, preview, chunk boundaries, state failures, timeout behavior, publication sequencing, and receipts. A real package preview additionally validates the content-prep tool's metadata. Live upload, tenant consent/RBAC, and installation on a pilot device require a tenant validation run; they have not been verified by the local tests.
+Unit tests use synthetic archives and mocked Graph/storage boundaries. The Blob client integration test uses the real SDK against an in-process loopback HTTP server and verifies complete payload bytes, partial blocks, block-list commit, size verification, repeated imports, and permanent-error handling. Detection tests use mocked registry data in both PowerShell 7 and Windows PowerShell 5.1. They exercise mapping, preview, chunk boundaries, state failures, timeout behavior, publication sequencing, and receipts. A real package preview additionally validates the content-prep tool's metadata. Live upload, tenant consent/RBAC, and installation on a pilot device require a tenant validation run; they have not been verified by the local tests.
 
 Implementation references:
 
