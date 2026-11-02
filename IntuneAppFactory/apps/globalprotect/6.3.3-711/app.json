@@ -23,7 +23,7 @@
     {
       "type": "MSI",
       "path": "GlobalProtect.msi",
-      "arguments": "/repair"
+      "arguments": "/f GlobalProtect.msi PORTAL=ccsf-vpn.sf.gov CONNECTMETHOD=on-demand /q"
     }
   ],
   "additionalFiles": [],

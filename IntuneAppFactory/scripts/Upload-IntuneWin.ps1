@@ -76,7 +76,7 @@ try {
     $context = Get-MgContext
     if (-not $context -or $context.TenantId -ne $TenantId.ToString() -or $context.Environment -ne 'Global') { throw 'Graph session does not match TenantId and the public cloud.' }
     if ($context.AuthType -eq 'Delegated' -and 'DeviceManagementApps.ReadWrite.All' -notin $context.Scopes) { throw 'Graph session lacks DeviceManagementApps.ReadWrite.All.' }
-    Import-FactoryBlobClient
+ #   Import-FactoryBlobClient
     Invoke-FactoryPublishPlan -Plan $plan -TenantId $TenantId -TimeoutSeconds $TimeoutSeconds
 } finally {
     $packageLock.Dispose()
