@@ -82,7 +82,7 @@ try {
             { param($c) $c.intune.upload.returnCodes[0].returnCode = '0' },
             { param($c) $c.intune.upload | Add-Member clientSecret 'must-not-be-stored' },
             { param($c) $c.intune.upload.restartBehavior = 'never' },
-            { param($c) $c.intune.upload.PSObject.Properties.Remove('deployMode') },
+            { param($c) $c.intune.upload.deployMode = 'Automatic' },
             { param($c) $c.intune.informationUrl = 'file:///C:/test' },
             { param($c) $c.intune.detection.check32BitOn64System = 'false' },
             { param($c) $c.intune.detection.value = 'not a version' },

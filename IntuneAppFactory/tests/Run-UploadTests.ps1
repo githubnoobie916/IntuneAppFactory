@@ -17,6 +17,40 @@ function Test-Case([string]$Name, [scriptblock]$Action) {
     try { & $Action; $script:passed++; Write-Host "PASS $Name" }
     catch { $script:failed++; Write-Host "FAIL $Name : $_" }
 }
+function New-TestBlobProbe {
+    return @{
+        Blocks=[Collections.Generic.List[object]]::new(); BlockLists=[Collections.Generic.List[object]]::new()
+        Clients=[Collections.Generic.List[string]]::new(); Positions=[Collections.Generic.List[long]]::new()
+        FailFirstBlock=$false; Attempts=0; Fetches=0; ReportedLength=[long](4MB + 17)
+    }
+}
+function New-TestBlobClient($Probe, [string]$Uri) {
+    $Probe.Clients.Add($Uri)
+    $client = [pscustomobject]@{Probe=$Probe;Uri=$Uri;Properties=[pscustomobject]@{Length=0L}}
+    $client | Add-Member ScriptMethod PutBlock {
+        param($Id, [IO.Stream]$Stream, $Checksum)
+        $this.Probe.Attempts++
+        $this.Probe.Positions.Add($Stream.Position)
+        if ($this.Probe.FailFirstBlock -and $this.Probe.Attempts -eq 1) {
+            $null = $Stream.ReadByte()
+            throw 'Simulated transient failure after consuming part of the block.'
+        }
+        $copy = [IO.MemoryStream]::new()
+        try {
+            $Stream.CopyTo($copy)
+            $this.Probe.Blocks.Add(@{Id=$Id;Bytes=$copy.ToArray();Uri=$this.Uri})
+        } finally { $copy.Dispose() }
+    }
+    $client | Add-Member ScriptMethod PutBlockList {
+        param($Ids)
+        $this.Probe.BlockLists.Add(@{Ids=@($Ids);Uri=$this.Uri})
+    }
+    $client | Add-Member ScriptMethod FetchAttributes {
+        $this.Probe.Fetches++
+        $this.Properties.Length = $this.Probe.ReportedLength
+    }
+    return $client
+}
 . "$projectRoot/scripts/IntuneUpload.ps1"
 $sandbox = Join-Path ([IO.Path]::GetTempPath()) ('IntuneAppFactory.UploadTests-' + [guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path "$sandbox/IntuneWin" -Force
@@ -123,7 +157,149 @@ try {
         }
     }
     Test-Case 'Missing upload settings fail locally without prompting' {
-        Assert-Throws { Get-FactoryUploadPlan -RevisionPath $sandbox } 'deployMode.*required|DeployMode.*required'
+        Assert-Throws { Get-FactoryUploadPlan -RevisionPath $sandbox } 'MinimumSupportedWindowsRelease.*required'
+    }
+    Test-Case 'Windows 10 and Windows 11 minimum releases work in JSON and CLI previews' {
+        $originalConfig = Get-Content "$sandbox/app.json" -Raw
+        $originalBuild = Get-Content "$sandbox/build.json" -Raw
+        try {
+            foreach ($release in @('1809','22H2','Windows11_24H2')) {
+                $configured = $originalConfig | ConvertFrom-Json
+                $configured.intune | Add-Member upload ([pscustomobject]@{deployMode='Silent';minimumSupportedWindowsRelease=$release;restartBehavior='allow'})
+                $configured | ConvertTo-Json -Depth 20 | Set-Content "$sandbox/app.json"
+                $updatedBuild = $originalBuild | ConvertFrom-Json
+                $updatedBuild.intune = $configured.intune
+                $updatedBuild | ConvertTo-Json -Depth 20 | Set-Content "$sandbox/build.json"
+                $jsonPlan = & "$projectRoot/scripts/Upload-IntuneWin.ps1" -RevisionPath $sandbox -Preview
+                Assert-True ($jsonPlan.AppBody.minimumSupportedWindowsRelease -ceq $release) "JSON release '$release' changed."
+                $cliPlan = & "$projectRoot/scripts/Upload-IntuneWin.ps1" -RevisionPath $sandbox -MinimumSupportedWindowsRelease $release -Preview
+                Assert-True ($cliPlan.AppBody.minimumSupportedWindowsRelease -ceq $release) "CLI release '$release' changed."
+            }
+        } finally {
+            Set-Content "$sandbox/app.json" $originalConfig
+            Set-Content "$sandbox/build.json" $originalBuild
+        }
+    }
+    Test-Case 'Unreleased Windows version is rejected by JSON and CLI before authentication' {
+        $upload = [pscustomobject]@{deployMode='Silent';minimumSupportedWindowsRelease='Windows11_24H1';restartBehavior='allow'}
+        Assert-Throws { Assert-FactoryUploadConfig $upload } 'release|Windows'
+        function Connect-MgGraph { throw 'Unexpected authentication' }
+        Assert-Throws { & "$projectRoot/scripts/Upload-IntuneWin.ps1" -RevisionPath $sandbox -DeployMode Silent -MinimumSupportedWindowsRelease Windows11_24H1 -RestartBehavior allow -Preview } 'release|Windows'
+        Assert-Throws { Get-FactoryUploadPlan -RevisionPath $sandbox -DeployMode Silent -MinimumSupportedWindowsRelease Windows11_24H1 -RestartBehavior allow } 'release|Windows'
+    }
+    Test-Case 'Auto is the default and deployment mode follows CLI then JSON precedence' {
+        $originalConfig = Get-Content "$sandbox/app.json" -Raw
+        $originalBuild = Get-Content "$sandbox/build.json" -Raw
+        try {
+            $configured = $originalConfig | ConvertFrom-Json
+            $configured.intune | Add-Member upload ([pscustomobject]@{minimumSupportedWindowsRelease='22H2';restartBehavior='allow'})
+            foreach ($mode in @($null,'Silent','Auto')) {
+                if ($null -ne $mode) { $configured.intune.upload | Add-Member deployMode $mode -Force }
+                $configured | ConvertTo-Json -Depth 20 | Set-Content "$sandbox/app.json"
+                $updatedBuild = $originalBuild | ConvertFrom-Json
+                $updatedBuild.intune = $configured.intune
+                $updatedBuild | ConvertTo-Json -Depth 20 | Set-Content "$sandbox/build.json"
+                $expected = if ($null -eq $mode) { 'Auto' } else { $mode }
+                $plan = & "$projectRoot/scripts/Upload-IntuneWin.ps1" -RevisionPath $sandbox -Preview
+                Assert-True ($plan.AppBody.installCommandLine -match "-DeployMode $expected`$") "Install did not resolve mode '$expected'."
+                Assert-True ($plan.AppBody.uninstallCommandLine -match "-DeployMode $expected`$") "Uninstall did not resolve mode '$expected'."
+                $override = & "$projectRoot/scripts/Upload-IntuneWin.ps1" -RevisionPath $sandbox -DeployMode Interactive -Preview
+                Assert-True ($override.AppBody.installCommandLine -match '-DeployMode Interactive$') 'Explicit CLI mode did not override JSON/default.'
+                $auto = & "$projectRoot/scripts/Upload-IntuneWin.ps1" -RevisionPath $sandbox -DeployMode Auto -Preview
+                Assert-True ($auto.AppBody.installCommandLine -match '-DeployMode Auto$') 'CLI Auto is not accepted.'
+            }
+        } finally {
+            Set-Content "$sandbox/app.json" $originalConfig
+            Set-Content "$sandbox/build.json" $originalBuild
+        }
+    }
+    Test-Case 'Optional metadata defaults omit requirements and publish the root display version' {
+        $plan = Get-FactoryUploadPlan @planArgs
+        Assert-True ($plan.ApiVersion -eq 'beta') 'Preview does not identify the beta API.'
+        Assert-True ($plan.AppBody.displayVersion -eq '26.05') 'Display version did not default from root version.'
+        Assert-True (@($plan.CategoryIds).Count -eq 0) 'Unexpected default categories.'
+        foreach ($field in @('developer','owner','privacyInformationUrl','isFeatured','allowAvailableUninstall','roleScopeTagIds','minimumFreeDiskSpaceInMB','minimumMemoryInMB','minimumNumberOfProcessors','minimumCpuSpeedInMHz')) {
+            Assert-True (-not $plan.AppBody.ContainsKey($field)) "Unspecified '$field' was sent to Graph."
+        }
+        Assert-True (-not $plan.AppBody.installExperience.ContainsKey('maxRunTimeInMinutes')) 'Unspecified installation runtime was sent to Graph.'
+    }
+    Test-Case 'JSON metadata maps to beta app properties and separates category relationships' {
+        $originalConfig = Get-Content "$sandbox/app.json" -Raw
+        $originalBuild = Get-Content "$sandbox/build.json" -Raw
+        try {
+            $configured = $originalConfig | ConvertFrom-Json
+            $metadata = @{
+                displayVersion='26.05-company';developer='Example developer';owner='Endpoint team'
+                privacyInformationUrl='https://example.com/privacy';notes='Approved package';isFeatured=$false
+                allowAvailableUninstall=$true;categoryIds=@('12345678-1234-1234-1234-123456789abc');roleScopeTagIds=@('0','12')
+            }
+            foreach ($name in $metadata.Keys) { $configured.intune | Add-Member $name $metadata[$name] }
+            $configured.intune | Add-Member upload ([pscustomobject]@{
+                minimumSupportedWindowsRelease='22H2';restartBehavior='allow';maxRunTimeInMinutes=15
+                minimumFreeDiskSpaceInMB=500;minimumMemoryInMB=0;minimumNumberOfProcessors=2;minimumCpuSpeedInMHz=1200
+            })
+            foreach ($boolean in @($true,$false)) {
+                $configured.intune.allowAvailableUninstall = $boolean
+                $configured | ConvertTo-Json -Depth 20 | Set-Content "$sandbox/app.json"
+                $updatedBuild = $originalBuild | ConvertFrom-Json
+                $updatedBuild.intune = $configured.intune
+                $updatedBuild | ConvertTo-Json -Depth 20 | Set-Content "$sandbox/build.json"
+                $plan = & "$projectRoot/scripts/Upload-IntuneWin.ps1" -RevisionPath $sandbox -Preview
+                foreach ($name in @('displayVersion','developer','owner','privacyInformationUrl','notes','isFeatured')) {
+                    Assert-True ($plan.AppBody.ContainsKey($name) -and $plan.AppBody[$name] -ceq $metadata[$name]) "Metadata '$name' changed or omitted."
+                }
+                Assert-True ($plan.AppBody.ContainsKey('allowAvailableUninstall') -and $plan.AppBody.allowAvailableUninstall -eq $boolean) 'Explicit uninstall boolean was lost.'
+                Assert-True ($plan.AppBody.roleScopeTagIds.Count -eq 2 -and $plan.AppBody.roleScopeTagIds[0] -is [string] -and $plan.AppBody.roleScopeTagIds[1] -ceq '12') 'Scope tag IDs changed.'
+                Assert-True ($plan.CategoryIds.Count -eq 1 -and $plan.CategoryIds[0] -ceq $metadata.categoryIds[0]) 'Category relationship IDs missing.'
+                Assert-True (-not $plan.AppBody.ContainsKey('categoryIds') -and -not $plan.AppBody.ContainsKey('categories')) 'Categories were embedded in the app create body.'
+                Assert-True ($plan.AppBody.installExperience.maxRunTimeInMinutes -eq 15 -and $plan.Transport.TimeoutSeconds -eq 900) 'Installation runtime was confused with upload timeout.'
+                foreach ($name in @('minimumFreeDiskSpaceInMB','minimumMemoryInMB','minimumNumberOfProcessors','minimumCpuSpeedInMHz')) {
+                    Assert-True ($plan.AppBody.ContainsKey($name) -and $plan.AppBody[$name] -eq $configured.intune.upload.$name) "Requirement '$name' changed or omitted."
+                }
+            }
+            $configured.intune.categoryIds = @(); $configured.intune.roleScopeTagIds = @()
+            $configured | ConvertTo-Json -Depth 20 | Set-Content "$sandbox/app.json"
+            $updatedBuild.intune = $configured.intune
+            $updatedBuild | ConvertTo-Json -Depth 20 | Set-Content "$sandbox/build.json"
+            $emptyPlan = Get-FactoryUploadPlan -RevisionPath $sandbox
+            Assert-True ($emptyPlan.CategoryIds.Count -eq 0 -and $emptyPlan.AppBody.ContainsKey('roleScopeTagIds') -and $emptyPlan.AppBody.roleScopeTagIds.Count -eq 0) 'Explicit empty collections were lost.'
+        } finally {
+            Set-Content "$sandbox/app.json" $originalConfig
+            Set-Content "$sandbox/build.json" $originalBuild
+        }
+    }
+    Test-Case 'Metadata types and tenant identifiers are validated locally' {
+        $originalConfig = Get-Content "$sandbox/app.json" -Raw
+        try {
+            foreach ($case in @(
+                @{Name='isFeatured';Value='false'}, @{Name='allowAvailableUninstall';Value=1},
+                @{Name='categoryIds';Value=@('not-a-guid')}, @{Name='categoryIds';Value='12345678-1234-1234-1234-123456789abc'},
+                @{Name='roleScopeTagIds';Value=@(12)}, @{Name='roleScopeTagIds';Value=@('tag-name')},
+                @{Name='displayVersion';Value=@('1.0')}, @{Name='owner';Value=42},
+                @{Name='privacyInformationUrl';Value='not-a-url'}
+            )) {
+                $configured = $originalConfig | ConvertFrom-Json
+                $configured.intune | Add-Member $case.Name $case.Value
+                $configured | ConvertTo-Json -Depth 20 | Set-Content "$sandbox/app.json"
+                Assert-Throws { Read-FactoryConfig -Path "$sandbox/app.json" -ExpectedVersion '26.05' } $case.Name
+            }
+        } finally { Set-Content "$sandbox/app.json" $originalConfig }
+    }
+    Test-Case 'Runtime and hardware requirements accept boundaries and reject invalid values' {
+        foreach ($field in @('maxRunTimeInMinutes','minimumFreeDiskSpaceInMB','minimumMemoryInMB','minimumNumberOfProcessors','minimumCpuSpeedInMHz')) {
+            $minimum = if ($field -eq 'maxRunTimeInMinutes') { 1 } else { 0 }
+            $maximum = if ($field -eq 'maxRunTimeInMinutes') { 1440 } else { [int]::MaxValue }
+            foreach ($value in @($minimum,$maximum)) {
+                $upload = [pscustomobject]@{minimumSupportedWindowsRelease='22H2';restartBehavior='allow'}
+                $upload | Add-Member $field $value
+                Assert-FactoryUploadConfig $upload
+            }
+            foreach ($value in @(($minimum - 1),([long]$maximum + 1),1.5,'15',$null)) {
+                $upload = [pscustomobject]@{minimumSupportedWindowsRelease='22H2';restartBehavior='allow'}
+                $upload | Add-Member $field $value
+                Assert-Throws { Assert-FactoryUploadConfig $upload } $field
+            }
+        }
     }
     Test-Case 'JSON enum fields reject singleton arrays before Graph publication' {
         foreach ($field in @('deployMode','restartBehavior','returnCodeType','operationType','operator')) {
@@ -165,20 +341,50 @@ try {
         Assert-True ($reg.operationType -eq 'string' -and $reg.comparisonValue -eq '' -and $reg.check32BitOn64System) 'Registry equality or view changed.'
     }
     Test-Case 'Upload streams the encrypted inner payload including the final partial block' {
-        $script:puts = [Collections.Generic.List[object]]::new()
-        function Invoke-FactoryStoragePut($Uri, [byte[]]$Bytes, $ContentType) {
-            $script:puts.Add(@{Uri=$Uri;Bytes=$Bytes.Clone();ContentType=$ContentType})
-        }
+        $probe = New-TestBlobProbe
+        function New-FactoryBlobClient($Uri) { New-TestBlobClient $probe $Uri }
         $location = @{azureStorageUri='https://test.blob.core.windows.net/c/b?sig=redacted';azureStorageUriExpirationDateTime=[DateTimeOffset]::UtcNow.AddHours(1).ToString('o')}
         Send-FactoryEncryptedContent -Path $archivePath -FileUri '/deviceAppManagement/mobileApps/test/files/test' -Location $location -TimeoutSeconds 10
-        Assert-True ($script:puts.Count -eq 3) 'Expected two data blocks and one block list.'
-        Assert-True ($script:puts[0].Bytes.Length -eq 4MB -and $script:puts[0].Bytes[0] -eq 42) 'Wrong first block.'
-        Assert-True ($script:puts[1].Bytes.Length -eq 17 -and $script:puts[1].Bytes[-1] -eq 99) 'Final block was corrupted.'
-        $list = [Text.Encoding]::UTF8.GetString($script:puts[2].Bytes)
-        Assert-True ($list -match '<Latest>MDAwMDAwMDA=</Latest><Latest>MDAwMDAwMDE=</Latest>') 'Wrong ordered block list.'
-        $script:puts.Clear()
+        Assert-True ($probe.Blocks.Count -eq 2 -and $probe.BlockLists.Count -eq 1) 'Expected two data blocks and one committed block list.'
+        Assert-True ($probe.Blocks[0].Bytes.Length -eq 4MB -and $probe.Blocks[0].Bytes[0] -eq 42) 'Wrong first block.'
+        Assert-True ($probe.Blocks[1].Bytes.Length -eq 17 -and $probe.Blocks[1].Bytes[-1] -eq 99) 'Final block was corrupted.'
+        Assert-True (($probe.BlockLists[0].Ids -join ',') -ceq ($probe.Blocks.Id -join ',')) 'Committed block list does not preserve upload order.'
+        Assert-True ($probe.Fetches -eq 1) 'Uploaded blob size was not verified.'
+        $probe = New-TestBlobProbe
         Send-FactoryEncryptedContent -Path $archivePath -FileUri '/test' -Location $location -TimeoutSeconds 10 -BlockSizeBytes 1MB -MaxRetries 0 -SasRenewalThresholdMinutes 5
-        Assert-True ($script:puts.Count -eq 6 -and $script:puts[0].Bytes.Length -eq 1MB -and $script:puts[4].Bytes.Length -eq 17) 'Configured block size not used.'
+        Assert-True ($probe.Blocks.Count -eq 5 -and $probe.Blocks[0].Bytes.Length -eq 1MB -and $probe.Blocks[4].Bytes.Length -eq 17) 'Configured block size not used.'
+    }
+    Test-Case 'Blob retries reset a partially consumed stream before resending' {
+        $probe = New-TestBlobProbe
+        $probe.FailFirstBlock = $true
+        function New-FactoryBlobClient($Uri) { New-TestBlobClient $probe $Uri }
+        function Start-Sleep { }
+        $location = @{azureStorageUri='https://test.blob.core.windows.net/c/b?sig=redacted';azureStorageUriExpirationDateTime=[DateTimeOffset]::UtcNow.AddHours(1).ToString('o')}
+        Send-FactoryEncryptedContent -Path $archivePath -FileUri '/test' -Location $location -MaxRetries 1
+        Assert-True ($probe.Attempts -eq 3 -and $probe.Positions[0] -eq 0 -and $probe.Positions[1] -eq 0) 'Retry did not rewind the failed block.'
+        Assert-True ($probe.Blocks[0].Bytes.Length -eq 4MB -and $probe.Blocks[0].Bytes[0] -eq 42 -and $probe.Blocks[1].Bytes[-1] -eq 99) 'Retry corrupted encrypted payload.'
+    }
+    Test-Case 'A committed blob with the wrong size is rejected' {
+        $probe = New-TestBlobProbe
+        $probe.ReportedLength = 1L
+        function New-FactoryBlobClient($Uri) { New-TestBlobClient $probe $Uri }
+        $location = @{azureStorageUri='https://test.blob.core.windows.net/c/b?sig=redacted';azureStorageUriExpirationDateTime=[DateTimeOffset]::UtcNow.AddHours(1).ToString('o')}
+        Assert-Throws { Send-FactoryEncryptedContent -Path $archivePath -FileUri '/test' -Location $location -MaxRetries 0 } 'size|length'
+        Assert-True ($probe.BlockLists.Count -eq 1 -and $probe.Fetches -eq 1) 'Blob size was not checked after committing blocks.'
+    }
+    Test-Case 'Renewed storage credentials rebuild the Blob client for subsequent operations' {
+        $probe = New-TestBlobProbe
+        $renewalProbe = @{Calls=0}
+        function New-FactoryBlobClient($Uri) { New-TestBlobClient $probe $Uri }
+        function Update-FactoryUploadLocation($FileUri, $Location, $TimeoutSeconds, $SasRenewalThresholdMinutes) {
+            $renewalProbe.Calls++
+            if ($renewalProbe.Calls -gt 1) { return @{azureStorageUri='https://test.blob.core.windows.net/c/b?sig=renewed';azureStorageUriExpirationDateTime=[DateTimeOffset]::UtcNow.AddHours(1).ToString('o')} }
+            return $Location
+        }
+        $location = @{azureStorageUri='https://test.blob.core.windows.net/c/b?sig=old';azureStorageUriExpirationDateTime=[DateTimeOffset]::UtcNow.AddHours(1).ToString('o')}
+        Send-FactoryEncryptedContent -Path $archivePath -FileUri '/test' -Location $location -MaxRetries 0
+        Assert-True ($probe.Blocks[0].Uri -match 'sig=old$' -and $probe.Blocks[-1].Uri -match 'sig=renewed$') 'Blocks continued using stale SAS credentials.'
+        Assert-True ($probe.BlockLists[0].Uri -match 'sig=renewed$') 'Block-list commit used stale SAS credentials.'
     }
     Test-Case 'Failed service states stop immediately and never count as success' {
         function Invoke-FactoryGraph { @{ uploadState='commitFileFailed' } }
@@ -235,6 +441,11 @@ try {
         Assert-True (@($script:calls | Where-Object { $_.Method -eq 'PATCH' -or $_.Uri -match '/assignments$' }).Count -eq 0) 'Failed content was published or assigned.'
         $failedReceipt = Get-Content "$sandbox/upload-66666666-6666-6666-6666-666666666666.json" -Raw | ConvertFrom-Json
         Assert-True ($failedReceipt.AppId -eq 'app-id' -and $failedReceipt.Status -eq 'Failed') 'Failed upload lost recovery state.'
+
+        $script:calls.Clear(); $script:commitFails = $false
+        function Send-FactoryEncryptedContent { throw 'Uploaded blob size does not match encrypted payload.' }
+        Assert-Throws { Invoke-FactoryPublishPlan -Plan $plan -TenantId '77777777-7777-7777-7777-777777777777' -TimeoutSeconds 1 } 'size does not match'
+        Assert-True (@($script:calls | Where-Object { $_.Method -eq 'PATCH' -or $_.Uri -match '/commit$|/assignments$' }).Count -eq 0) 'A size mismatch was committed, published or assigned.'
     }
     Test-Case 'Preview and WhatIf run without an authentication module or network' {
         function Connect-MgGraph { throw 'Unexpected authentication' }
@@ -295,9 +506,8 @@ try {
     }
     Test-Case 'Zero retries performs exactly one storage attempt' {
         $probe = @{Calls=0}
-        function Invoke-WebRequest { $probe.Calls++; return @{StatusCode=503} }
         function Start-Sleep { }
-        Assert-Throws { Invoke-FactoryStoragePut -Uri 'https://test.blob.core.windows.net/a?sig=fake' -Bytes ([byte[]]@(1)) -MaxRetries 0 } 'after 1 attempt'
+        Assert-Throws { Invoke-FactoryBlobOperation -Operation { $probe.Calls++; throw 'Simulated storage failure' } -MaxRetries 0 -Name 'Upload block' } 'after 1 attempt'
         Assert-True ($probe.Calls -eq 1) 'Zero retries still retried storage.'
     }
     Test-Case 'Invalid metadata and exit code conflicts fail before publication' {

@@ -168,7 +168,8 @@ function Read-FactoryConfig {
     Assert-FactoryText $prompt.message 'app.psadt.completionPrompt.message' -AllowEmpty:(-not $prompt.enabled)
     Assert-FactoryText $prompt.buttonRightText 'app.psadt.completionPrompt.buttonRightText'
 
-    Assert-FactoryObject $config.intune @('displayName','description','installContext','detection','icon','informationUrl','upload') 'app.intune' @('displayName','description','installContext','detection','icon')
+    Assert-FactoryObject $config.intune @('displayName','description','installContext','detection','icon','informationUrl','upload','displayVersion','developer','owner','privacyInformationUrl','notes','isFeatured','allowAvailableUninstall','categoryIds','roleScopeTagIds') 'app.intune' @('displayName','description','installContext','detection','icon')
+    Assert-FactoryIntuneMetadata $config.intune
     if ('informationUrl' -in $config.intune.PSObject.Properties.Name) {
         Assert-FactoryText $config.intune.informationUrl 'app.intune.informationUrl' -AllowEmpty
         $informationUri = $null
@@ -218,11 +219,20 @@ function Read-FactoryConfig {
 
 function Assert-FactoryUploadConfig($Upload) {
     $label = 'app.intune.upload'
-    Assert-FactoryObject $Upload @('deployMode','minimumSupportedWindowsRelease','restartBehavior','returnCodes','transport') $label @('deployMode','minimumSupportedWindowsRelease','restartBehavior')
-    Assert-FactoryText $Upload.deployMode "$label.deployMode"
+    Assert-FactoryObject $Upload @('deployMode','minimumSupportedWindowsRelease','restartBehavior','returnCodes','transport','maxRunTimeInMinutes','minimumFreeDiskSpaceInMB','minimumMemoryInMB','minimumNumberOfProcessors','minimumCpuSpeedInMHz') $label @('minimumSupportedWindowsRelease','restartBehavior')
+    if ('deployMode' -in $Upload.PSObject.Properties.Name) {
+        Assert-FactoryText $Upload.deployMode "$label.deployMode"
+        if ($Upload.deployMode -notin @('Auto','Silent','NonInteractive','Interactive')) { throw "$label.deployMode must be Auto, Silent, NonInteractive or Interactive." }
+    }
     Assert-FactoryText $Upload.restartBehavior "$label.restartBehavior"
-    if ($Upload.deployMode -notin @('Silent','NonInteractive','Interactive')) { throw "$label.deployMode must be Silent, NonInteractive or Interactive." }
-    if ($Upload.minimumSupportedWindowsRelease -isnot [string] -or $Upload.minimumSupportedWindowsRelease -notmatch '^(Windows11_)?[0-9]{2}H[12]$') { throw "$label.minimumSupportedWindowsRelease must use Graph release notation, for example Windows11_24H2." }
+    Assert-FactoryWindowsRelease $Upload.minimumSupportedWindowsRelease
+    foreach ($field in @('maxRunTimeInMinutes','minimumFreeDiskSpaceInMB','minimumMemoryInMB','minimumNumberOfProcessors','minimumCpuSpeedInMHz')) {
+        if ($field -notin $Upload.PSObject.Properties.Name) { continue }
+        $minimum = 0; $maximum = [int]::MaxValue
+        if ($field -eq 'maxRunTimeInMinutes') { $minimum = 1; $maximum = 1440 }
+        $value = $Upload.$field
+        if (($value -isnot [int] -and $value -isnot [long]) -or $value -lt $minimum -or $value -gt $maximum) { throw "$label.$field must be an integer between $minimum and $maximum." }
+    }
     if ($Upload.restartBehavior -notin @('basedOnReturnCode','suppress','allow','force')) { throw "$label.restartBehavior must be basedOnReturnCode, suppress, allow or force." }
     if ('returnCodes' -in $Upload.PSObject.Properties.Name) {
         if ($Upload.returnCodes -isnot [array] -or $Upload.returnCodes.Count -eq 0) { throw "$label.returnCodes must be a nonempty array." }
@@ -242,6 +252,44 @@ function Assert-FactoryUploadConfig($Upload) {
         foreach ($name in $ranges.Keys) {
             $value = $Upload.transport.$name
             if (($value -isnot [int] -and $value -isnot [long]) -or $value -lt $ranges[$name][0] -or $value -gt $ranges[$name][1]) { throw "$label.transport.$name must be an integer between $($ranges[$name][0]) and $($ranges[$name][1])." }
+        }
+    }
+}
+
+function Assert-FactoryWindowsRelease($Value) {
+    # Graph values, not a shape-only regex: reject typos such as Windows11_24H1.
+    $supported = @('1607','1703','1709','1803','1809','1903','1909','2004','20H2','21H1','21H2','22H2',
+        'Windows11_21H2','Windows11_22H2','Windows11_23H2','Windows11_24H2','Windows11_25H2','Windows11_26H1','Windows11_26H2')
+    if ($Value -isnot [string] -or $Value -cnotin $supported) {
+        throw "minimumSupportedWindowsRelease must be a recognized Graph Windows release, for example 1809 or 22H2 (Windows 10), or Windows11_24H2. Allowed values: $($supported -join ', ')."
+    }
+}
+
+function Assert-FactoryIntuneMetadata($Intune) {
+    foreach ($field in @('displayVersion','developer','owner','notes','privacyInformationUrl')) {
+        if ($field -in $Intune.PSObject.Properties.Name) {
+            Assert-FactoryText $Intune.$field "app.intune.$field" -AllowEmpty:($field -ne 'displayVersion')
+        }
+    }
+    if ($Intune.privacyInformationUrl) {
+        $uri = $null
+        if (-not [uri]::TryCreate($Intune.privacyInformationUrl, [UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -ne 'https' -or $uri.UserInfo) { throw 'app.intune.privacyInformationUrl must be an HTTPS URL without credentials, or empty.' }
+    }
+    foreach ($field in @('isFeatured','allowAvailableUninstall')) {
+        if ($field -in $Intune.PSObject.Properties.Name -and $Intune.$field -isnot [bool]) { throw "app.intune.$field must be a JSON boolean." }
+    }
+    foreach ($field in @('categoryIds','roleScopeTagIds')) {
+        if ($field -notin $Intune.PSObject.Properties.Name) { continue }
+        if ($Intune.$field -isnot [array]) { throw "app.intune.$field must be an array of strings." }
+        $seen = @{}
+        foreach ($id in $Intune.$field) {
+            Assert-FactoryText $id "app.intune.$field[]"
+            if ($field -eq 'categoryIds') {
+                $guid = [guid]::Empty
+                if ($id -notmatch '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$' -or -not [guid]::TryParse($id, [ref]$guid) -or $guid -eq [guid]::Empty) { throw 'app.intune.categoryIds must contain nonempty category GUIDs.' }
+            } elseif ($id -notmatch '^(0|[1-9][0-9]*)$') { throw 'app.intune.roleScopeTagIds must contain numeric ID strings.' }
+            if ($seen.ContainsKey($id)) { throw "app.intune.$field contains a duplicate ID." }
+            $seen[$id] = $true
         }
     }
 }

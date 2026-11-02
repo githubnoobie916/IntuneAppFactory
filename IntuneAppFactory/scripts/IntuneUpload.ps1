@@ -1,20 +1,54 @@
 #requires -Version 7.2
 # Publishing helpers only; never copied into the deployment package.
 . "$PSScriptRoot/IntuneWin.ps1"
+. "$PSScriptRoot/BlobClient.ps1"
 
 function Invoke-FactoryGraph {
     param([string]$Method = 'GET', [Parameter(Mandatory)][string]$Uri, $Body)
-    if ($Uri.StartsWith('/')) { $Uri = 'https://graph.microsoft.com/v1.0' + $Uri }
+    if ($Uri.StartsWith('/')) { $Uri = 'https://graph.microsoft.com/beta' + $Uri }
     $target = [uri]$Uri
-    if ($target.Scheme -ne 'https' -or $target.Host -ne 'graph.microsoft.com' -or -not $target.AbsolutePath.StartsWith('/v1.0/deviceAppManagement/')) { throw 'Unexpected Graph endpoint.' }
+    if ($target.Scheme -ne 'https' -or $target.Host -ne 'graph.microsoft.com' -or $target.Port -ne 443 -or $target.UserInfo -or $target.Fragment -or -not $target.AbsolutePath.StartsWith('/beta/deviceAppManagement/')) { throw 'Unexpected Graph endpoint.' }
     $request = @{ Method=$Method; Uri=$Uri; OutputType='PSObject'; ErrorAction='Stop'; Verbose=$false; Debug=$false }
     if ($null -ne $Body) { $request.Body = ($Body | ConvertTo-Json -Depth 20 -Compress); $request.ContentType = 'application/json' }
     try { Invoke-MgGraphRequest @request }
     catch {
-        # Do not echo responses or request bodies: file metadata contains encryption keys.
-        $status = $_.Exception.Response.StatusCode
-        throw "Graph $Method failed (HTTP $status). Check permissions, connectivity, and the upload receipt; no automatic rollback was performed."
+        throw (Get-FactoryGraphError -Record $_ -Method $Method -Path $target.AbsolutePath -Body $Body)
     }
+}
+
+function Get-FactoryGraphError {
+    param($Record, [string]$Method, [string]$Path, $Body)
+    $status = $Record.Exception.Response.StatusCode
+    if (-not $status) { $status = $Record.Exception.StatusCode }
+    $code = 'Unknown'; $requestId = 'unavailable'
+    $message = $Record.Exception.Message
+    try {
+        $details = $Record.ErrorDetails.Message | ConvertFrom-Json -ErrorAction Stop
+        if ($details.error.code -match '^[A-Za-z0-9_.-]{1,100}$') { $code = $details.error.code }
+        if ($details.error.message -is [string]) { $message = $details.error.message }
+        $id = $details.error.innerError.'request-id'
+        if ($id -match '^[a-fA-F0-9-]{36}$') { $requestId = $id }
+    } catch { } # Only selected fields from structured responses are eligible for display.
+    if ($requestId -eq 'unavailable' -and $Record.Exception.Response.Headers) {
+        try {
+            $id = @($Record.Exception.Response.Headers.GetValues('request-id'))[0]
+            if ($id -match '^[a-fA-F0-9-]{36}$') { $requestId = $id }
+        } catch { }
+    }
+    # Graph can echo request data in an error. Remove known sensitive body values,
+    # URLs (including SAS queries), bearer credentials and long base64 strings.
+    if ($null -ne $Body) {
+        $json = $Body | ConvertTo-Json -Depth 20 -Compress
+        foreach ($match in [regex]::Matches($json, '"(?:encryptionKey|macKey|initializationVector|mac|fileDigest|scriptContent|value)":"([^"\\]+)"')) {
+            if ($match.Groups[1].Value) { $message = $message.Replace($match.Groups[1].Value, '[redacted]') }
+        }
+    }
+    $message = [regex]::Replace($message, '(?i)https?://[^\s"''<>]+', '[URL redacted]')
+    $message = [regex]::Replace($message, '(?i)Bearer\s+[^\s"'']+', 'Bearer [redacted]')
+    $message = [regex]::Replace($message, '[A-Za-z0-9+/]{40,}={0,2}', '[redacted]')
+    $message = [regex]::Replace($message, '[\x00-\x1f]', ' ')
+    if ($message.Length -gt 1000) { $message = $message.Substring(0,1000) }
+    return "Graph $Method $Path failed (HTTP $status; code $code; request-id $requestId): $message"
 }
 
 function Wait-FactoryUploadState {
@@ -34,26 +68,6 @@ function Assert-FactoryStorageUri([string]$Uri) {
     if (-not [uri]::TryCreate($Uri, [UriKind]::Absolute, [ref]$target) -or $target.Scheme -ne 'https' -or
         $target.Host -notmatch '^[a-z0-9]+\.blob\.core\.windows\.net$' -or $target.Port -ne 443 -or
         $target.UserInfo -or -not $target.Query -or $target.Fragment) { throw 'Expected an Azure Blob HTTPS upload URI for the public cloud.' }
-}
-
-function Invoke-FactoryStoragePut {
-    param([string]$Uri, [byte[]]$Bytes, [string]$ContentType = 'application/octet-stream', [ValidateRange(0,10)][int]$MaxRetries = 3)
-    Assert-FactoryStorageUri $Uri
-    # PUT of the same block ID or block list is safe to retry after a lost response.
-    for ($attempt = 0; $attempt -le $MaxRetries; $attempt++) {
-        $response = $null
-        try {
-            $response = Invoke-WebRequest -Method Put -Uri $Uri -Body $Bytes -ContentType $ContentType `
-                -Headers @{'x-ms-version'='2021-12-02'} -TimeoutSec 120 -MaximumRedirection 0 `
-                -SkipHttpErrorCheck -ErrorAction Stop -Verbose:$false -Debug:$false
-        } catch { } # The native exception may contain the SAS URI; never propagate it.
-        if ($response -and [int]$response.StatusCode -eq 201) { return }
-        if ($response -and [int]$response.StatusCode -notin @(408,429,500,502,503,504)) {
-            throw "Azure Blob upload failed (HTTP $([int]$response.StatusCode)); SAS details omitted."
-        }
-        if ($attempt -lt $MaxRetries) { Start-Sleep -Seconds ([Math]::Min(30, [Math]::Pow(2, $attempt + 1))) }
-    }
-    throw "Azure Blob upload failed after $($MaxRetries + 1) attempts; SAS details omitted."
 }
 
 function Update-FactoryUploadLocation {
@@ -93,16 +107,25 @@ function Send-FactoryEncryptedContent {
                 if ($count -eq 0) { throw 'Unexpected end of encrypted content.' }
                 if ($blocks.Count -ge 50000) { throw 'Encrypted content exceeds the block upload limit.' }
                 $Location = Update-FactoryUploadLocation $FileUri $Location $TimeoutSeconds -SasRenewalThresholdMinutes $SasRenewalThresholdMinutes
+                $client = New-FactoryBlobClient $Location.azureStorageUri
                 $block = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($blocks.Count.ToString('D8')))
-                $data = [byte[]]::new($count)
-                [Array]::Copy($buffer, $data, $count)
-                Invoke-FactoryStoragePut -Uri ($Location.azureStorageUri + '&comp=block&blockid=' + [uri]::EscapeDataString($block)) -Bytes $data -MaxRetries $MaxRetries
+                $memory = [IO.MemoryStream]::new($buffer, 0, $count, $false, $true)
+                try {
+                    Invoke-FactoryBlobOperation -Name 'PutBlock' -MaxRetries $MaxRetries -Operation {
+                        $memory.Position = 0
+                        $client.PutBlock($block, $memory, $null)
+                    }
+                } finally { $memory.Dispose() }
                 $blocks.Add($block); $total += $count
                 Write-Progress -Activity 'Uploading encrypted Intune content' -Status "$total / $($entry.Length) bytes" -PercentComplete (100 * $total / $entry.Length)
             }
             $Location = Update-FactoryUploadLocation $FileUri $Location $TimeoutSeconds -SasRenewalThresholdMinutes $SasRenewalThresholdMinutes
-            $xml = '<?xml version="1.0" encoding="utf-8"?><BlockList>' + (($blocks | ForEach-Object { "<Latest>$_</Latest>" }) -join '') + '</BlockList>'
-            Invoke-FactoryStoragePut -Uri ($Location.azureStorageUri + '&comp=blocklist') -Bytes ([Text.Encoding]::UTF8.GetBytes($xml)) -ContentType 'application/xml' -MaxRetries $MaxRetries
+            $client = New-FactoryBlobClient $Location.azureStorageUri
+            Invoke-FactoryBlobOperation -Name 'PutBlockList' -MaxRetries $MaxRetries -Operation { $client.PutBlockList($blocks) }
+            $Location = Update-FactoryUploadLocation $FileUri $Location $TimeoutSeconds -SasRenewalThresholdMinutes $SasRenewalThresholdMinutes
+            $client = New-FactoryBlobClient $Location.azureStorageUri
+            Invoke-FactoryBlobOperation -Name 'FetchAttributes' -MaxRetries $MaxRetries -Operation { $client.FetchAttributes() }
+            if ($client.Properties.Length -ne $entry.Length) { throw "Uploaded blob size mismatch: expected $($entry.Length), received $($client.Properties.Length). Content was not committed to Intune." }
         } finally { $stream.Dispose(); Write-Progress -Activity 'Uploading encrypted Intune content' -Completed }
     } finally { $archive.Dispose() }
 }
@@ -141,6 +164,7 @@ function Read-FactoryUploadArchive([string]$Path) {
                 size = [long]$doc.ApplicationInfo.UnencryptedContentSize
                 sizeEncrypted = $archive.GetEntry('IntuneWinPackage/Contents/IntunePackage.intunewin').Length
                 isDependency = $false
+                manifest = $null
             }
         }
     } finally { $archive.Dispose() }
@@ -192,8 +216,8 @@ function Get-FactoryUploadPlan {
     param(
         [Parameter(Mandatory)][string]$RevisionPath,
         [string]$IntuneWinPath,
-        [ValidateSet('Silent','NonInteractive','Interactive')][string]$DeployMode,
-        [ValidatePattern('^(Windows11_)?[0-9]{2}H[12]$')][string]$MinimumSupportedWindowsRelease,
+        [ValidateSet('Auto','Silent','NonInteractive','Interactive')][string]$DeployMode,
+        [string]$MinimumSupportedWindowsRelease,
         [ValidateSet('basedOnReturnCode','suppress','allow','force')][string]$RestartBehavior,
         [ValidateRange(1,7200)][int]$TimeoutSeconds
     )
@@ -207,11 +231,13 @@ function Get-FactoryUploadPlan {
     if ($config.revision -cne $build.revision) { throw 'The app.json and build.json revisions do not match.' }
     $upload = $config.intune.upload
     if (-not $DeployMode -and $upload.deployMode) { $DeployMode = $upload.deployMode }
+    if (-not $DeployMode) { $DeployMode = 'Auto' }
     if (-not $MinimumSupportedWindowsRelease -and $upload.minimumSupportedWindowsRelease) { $MinimumSupportedWindowsRelease = $upload.minimumSupportedWindowsRelease }
     if (-not $RestartBehavior -and $upload.restartBehavior) { $RestartBehavior = $upload.restartBehavior }
-    foreach ($setting in @('DeployMode','MinimumSupportedWindowsRelease','RestartBehavior')) {
+    foreach ($setting in @('MinimumSupportedWindowsRelease','RestartBehavior')) {
         if (-not (Get-Variable $setting -ValueOnly)) { throw "$setting is required: specify it in intune.upload or on the command line." }
     }
+    Assert-FactoryWindowsRelease $MinimumSupportedWindowsRelease
     $transport = @{MaxRetries=3;BlockSizeBytes=4MB;SasRenewalThresholdMinutes=3;TimeoutSeconds=900}
     if ($upload.transport) {
         foreach ($name in @($transport.Keys)) { $transport[$name] = [int]$upload.transport.$name }
@@ -252,6 +278,7 @@ function Get-FactoryUploadPlan {
     $body = @{
         '@odata.type' = '#microsoft.graph.win32LobApp'
         displayName = $config.intune.displayName; description = $config.intune.description; publisher = $config.publisher
+        displayVersion = $config.version
         notes = "IntuneAppFactory: $($build.appName) $($build.version) revision $($build.revision)"
         fileName = [IO.Path]::GetFileName($IntuneWinPath); setupFilePath = 'Invoke-AppDeployToolkit.exe'
         installCommandLine = $build.installCommand + " -DeployMode $DeployMode"
@@ -262,18 +289,29 @@ function Get-FactoryUploadPlan {
         rules = @($detection)
         returnCodes = @($codes.Keys | ForEach-Object { @{ returnCode = [int]$_; type = $codes[$_] } })
     }
-    if ($config.intune.informationUrl) { $body.informationUrl = $config.intune.informationUrl }
+    foreach ($field in @('displayVersion','developer','owner','informationUrl','privacyInformationUrl','notes','isFeatured','allowAvailableUninstall','roleScopeTagIds')) {
+        if ($field -in $config.intune.PSObject.Properties.Name) { $body[$field] = $config.intune.$field }
+    }
+    foreach ($field in @('minimumFreeDiskSpaceInMB','minimumMemoryInMB','minimumNumberOfProcessors','minimumCpuSpeedInMHz')) {
+        if ($field -in $upload.PSObject.Properties.Name) { $body[$field] = $upload.$field }
+    }
+    if ('maxRunTimeInMinutes' -in $upload.PSObject.Properties.Name) { $body.installExperience.maxRunTimeInMinutes = $upload.maxRunTimeInMinutes }
     if ($build.icon) {
         $icon = Get-FactoryPath $RevisionPath $build.icon
         Assert-FactoryNoLinks $icon
         $iconBytes = [IO.File]::ReadAllBytes($icon)
         if ($iconBytes.Length -lt 8 -or [Convert]::ToHexString($iconBytes[0..7]) -ne '89504E470D0A1A0A') { throw 'The build icon must be a PNG file.' }
-        $body.largeIcon = @{ type = 'image/png'; value = [Convert]::ToBase64String($iconBytes) }
+        $body.largeIcon = @{ '@odata.type' = '#microsoft.graph.mimeContent'; type = 'image/png'; value = [Convert]::ToBase64String($iconBytes) }
     }
     return [pscustomobject]@{
         RevisionPath = $RevisionPath; IntuneWinPath = $IntuneWinPath
         SHA256 = (Get-FileHash -LiteralPath $IntuneWinPath -Algorithm SHA256).Hash
         AppBody = $body; FileBody = $archive.FileBody
+        ApiVersion = 'beta'
+        CategoryIds = @($config.intune.categoryIds | Where-Object { $null -ne $_ })
+        CategoryOperations = @($config.intune.categoryIds | Where-Object { $null -ne $_ } | ForEach-Object {
+            @{ Method='POST'; RelativePath='categories/$ref'; Body=@{'@odata.id'="https://graph.microsoft.com/beta/deviceAppManagement/mobileAppCategories/$_"} }
+        })
         Transport = $transport
         Assignments = @()
     }
@@ -300,6 +338,7 @@ function Invoke-FactoryPublishPlan {
         Status='InProgress'; Stage='CheckingDuplicates'; TenantId=$TenantId.ToString(); AppId=$null
         ContentVersionId=$null; FileId=$null; SHA256=$Plan.SHA256; IntuneWinPath=$Plan.IntuneWinPath
         DisplayName=$Plan.AppBody.displayName; Assignments=@(); UpdatedUtc=$null
+        ApiVersion='beta'; ContentPublished=$false; CategoryIds=@(); Failure=$null
     }
     try {
         Write-FactoryUploadReceipt $receiptStream $receipt
@@ -310,6 +349,13 @@ function Invoke-FactoryPublishPlan {
             if (@($page.value).Count -gt 0) { throw 'An app with this display name already exists. This uploader creates new apps only; review the existing app in Intune.' }
             $next = $page.'@odata.nextLink'
         } while ($next)
+        if ($Plan.CategoryIds.Count) {
+            $receipt.Stage = 'ValidatingCategories'; Write-FactoryUploadReceipt $receiptStream $receipt
+            foreach ($categoryId in $Plan.CategoryIds) {
+                $category = Invoke-FactoryGraph -Uri "/deviceAppManagement/mobileAppCategories/$categoryId"
+                if ($category.id -ne $categoryId) { throw "Category $categoryId could not be verified in this tenant." }
+            }
+        }
         $receipt.Stage = 'CreatingApp'; Write-FactoryUploadReceipt $receiptStream $receipt
         $app = Invoke-FactoryGraph -Method POST -Uri '/deviceAppManagement/mobileApps' -Body $Plan.AppBody
         if (-not $app.id) { throw 'Create app returned no ID. Inspect Intune before retrying.' }
@@ -344,7 +390,26 @@ function Invoke-FactoryPublishPlan {
             if ($timer.Elapsed.TotalSeconds -ge $TimeoutSeconds) { throw 'Timed out waiting for the app to be published. Inspect the app before retrying.' }
             Start-Sleep -Seconds ([Math]::Min(5, $TimeoutSeconds))
         } while ($true)
+        $receipt.ContentPublished = $true
         $receipt.Status = 'Published'; $receipt.Stage = 'Published'; Write-FactoryUploadReceipt $receiptStream $receipt
+        if ($Plan.CategoryIds.Count) {
+            $receipt.Stage = 'ConfiguringCategories'; Write-FactoryUploadReceipt $receiptStream $receipt
+            foreach ($categoryId in $Plan.CategoryIds) {
+                $null = Invoke-FactoryGraph -Method POST -Uri ($appUri + '/categories/$ref') -Body @{'@odata.id'="https://graph.microsoft.com/beta/deviceAppManagement/mobileAppCategories/$categoryId"}
+                $receipt.CategoryIds += $categoryId
+                Write-FactoryUploadReceipt $receiptStream $receipt
+            }
+            $categoryIds = @()
+            $next = "$appUri/categories"
+            do {
+                $page = Invoke-FactoryGraph -Uri $next
+                $categoryIds += @($page.value | ForEach-Object { $_.id })
+                $next = $page.'@odata.nextLink'
+            } while ($next)
+            foreach ($categoryId in $Plan.CategoryIds) {
+                if ($categoryId -notin $categoryIds) { throw "Published app category $categoryId was not confirmed. Inspect the app before retrying." }
+            }
+        }
         foreach ($assignment in $Plan.Assignments) {
             $receipt.Stage = 'AssigningGroup'; Write-FactoryUploadReceipt $receiptStream $receipt
             $created = Invoke-FactoryGraph -Method POST -Uri "$appUri/assignments" -Body $assignment
@@ -355,7 +420,8 @@ function Invoke-FactoryPublishPlan {
         return [pscustomobject]@{Status='Published'; AppId=$receipt.AppId; TenantId=$TenantId; ReceiptPath=$receiptPath; Assignments=$receipt.Assignments}
     } catch {
         $failureMessage = $_.Exception.Message
-        $receipt.Status = 'Failed'
+        $receipt.Status = if ($receipt.ContentPublished) { 'PublishedWithErrors' } else { 'Failed' }
+        $receipt.Failure = $failureMessage
         try { Write-FactoryUploadReceipt $receiptStream $receipt }
         catch { Write-Warning 'Could not persist the failure receipt. Keep the app ID from the error and inspect Intune before retrying.' }
         throw "Upload stopped during $($receipt.Stage). App ID: '$($receipt.AppId)'. Receipt: '$receiptPath'. $failureMessage"

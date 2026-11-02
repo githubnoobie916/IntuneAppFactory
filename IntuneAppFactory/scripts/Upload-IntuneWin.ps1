@@ -16,8 +16,8 @@ Use a pre-established Graph session after verifying its tenant and public-cloud 
 param(
     [Parameter(Mandatory)][string]$RevisionPath,
     [string]$IntuneWinPath,
-    [ValidateSet('Silent','NonInteractive','Interactive')][string]$DeployMode,
-    [ValidatePattern('^(Windows11_)?[0-9]{2}H[12]$')][string]$MinimumSupportedWindowsRelease,
+    [ValidateSet('Auto','Silent','NonInteractive','Interactive')][string]$DeployMode,
+    [string]$MinimumSupportedWindowsRelease,
     [ValidateSet('basedOnReturnCode','suppress','allow','force')][string]$RestartBehavior,
     [guid]$TenantId = [guid]::Empty,
     [guid]$ClientId = [guid]::Empty,
@@ -76,6 +76,7 @@ try {
     $context = Get-MgContext
     if (-not $context -or $context.TenantId -ne $TenantId.ToString() -or $context.Environment -ne 'Global') { throw 'Graph session does not match TenantId and the public cloud.' }
     if ($context.AuthType -eq 'Delegated' -and 'DeviceManagementApps.ReadWrite.All' -notin $context.Scopes) { throw 'Graph session lacks DeviceManagementApps.ReadWrite.All.' }
+    Import-FactoryBlobClient
     Invoke-FactoryPublishPlan -Plan $plan -TenantId $TenantId -TimeoutSeconds $TimeoutSeconds
 } finally {
     $packageLock.Dispose()
