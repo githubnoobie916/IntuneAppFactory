@@ -1,0 +1,79 @@
+{
+  "name": "GlobalProtect VPN",
+  "publisher": "Palo Alto Networks",
+  "version": "6.3.3-711",
+  "architecture": "x64",
+  "language": "EN",
+  "revision": "01",
+  "install": [
+    { "type": "MSI", "path": "GlobalProtect.msi", "arguments": "/passive PORTAL=ccsf-vpn.sf.gov CONNECTMETHOD=on-demand" }
+  ],
+  "uninstall": [
+    { "type": "MSI", "path": "GlobalProtect.msi", "arguments": "/passive /uninstall" }
+  ],
+  "repair": [
+    { "type": "MSI", "path": "GlobalProtect.msi", "arguments": "/repair" }
+  ],
+  "additionalFiles": [],
+  "psadt": {
+    "processesToClose": [{ "name": "pangps", "description": "GlobalProtect Service" }, { "name": "pangpa", "description": "GlobalProtect Client" }],
+    "closeProcesses": false,
+    "closeProcessesCountdown": 60,
+    "allowDefer": true,
+    "deferTimes": 3,
+    "checkDiskSpace": true,
+    "persistPrompt": true,
+    "suppressRebootPassThru": false,
+    "terminalServerMode": false,
+    "disableLogging": false,
+    "scriptAuthor": "IntuneAppFactory",
+    "scriptVersion": "1.0.0",
+    "scriptDate": "2026-11-02",
+    "successExitCodes": [0],
+    "rebootExitCodes": [1641, 3010],
+    "installName": "GlobalProtect VPN",
+    "installTitle": "GlobalProtect VPN",
+    "completionPrompt": {
+      "enabled": true,
+      "message": "GlobalProtect VPN installation completed.",
+      "buttonRightText": "OK",
+      "noWait": true
+    }
+  },
+  "intune": {
+    "displayName": "GlobalProtect VPN",
+    "description": "VPN client. Service provided by Department of Technology. ",
+    "informationUrl": "https://docs.paloaltonetworks.com/globalprotect/getting-started/globalprotect-overview",
+    "installContext": "system",
+    "icon": "GlobalProtect-icon.png",
+    "detection": {
+      "type": "powershell",
+      "scriptpath": "detection/detectionscript.ps1",
+      "runas32bit": false,
+      "enforceSignatureCheck": false
+    },
+    "upload": {
+      "deployMode": "Silent",
+      "minimumSupportedWindowsRelease": "Windows11_24H1",
+      "restartBehavior": "suppress",
+      "returnCodes": [
+        { "returnCode": 0, "type": "success" },
+        { "returnCode": 3010, "type": "softReboot" },
+        { "returnCode": 1641, "type": "hardReboot" },
+        { "returnCode": 1618, "type": "retry" },
+        { "returnCode": 60001, "type": "failed" },
+        { "returnCode": 60008, "type": "failed" },
+        { "returnCode": 60010, "type": "failed" },
+        { "returnCode": 60011, "type": "failed" },
+        { "returnCode": 1602, "type": "failed" }
+      ],
+      "transport": {
+        "maxRetries": 10,
+        "blockSizeBytes": 4194304,
+        "sasRenewalThresholdMinutes": 5,
+        "timeoutSeconds": 900
+      }
+    }
+  },
+  "notes": "Adapted from the user-provided example; version, installer switches and registry detection need vendor/device validation. Windows11_24H2 is an illustrative fleet requirement, not equivalent to the original v10_1607 setting. No installer has been downloaded. The icon path is relative to apps/<AppId>/: for AppId notepadplusplus, supply apps/notepadplusplus/icon.png before building. Each version can use the same icon.png. Set intune.icon to an empty string to omit the icon. No Notepad++ icon file is included."
+}
