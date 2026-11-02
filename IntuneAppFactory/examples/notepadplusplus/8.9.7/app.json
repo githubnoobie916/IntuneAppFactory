@@ -43,7 +43,7 @@
     "description": "Notepad++ is a free source code editor and Notepad replacement.",
     "informationUrl": "https://notepad-plus-plus.org/downloads/v8.9.7/",
     "installContext": "system",
-    "icon": "",
+    "icon": "icon.png",
     "detection": {
       "type": "registry",
       "key": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Notepad++",
@@ -71,5 +71,5 @@
       }
     }
   },
-  "notes": "Adapted from the user-provided example; version, installer switches and registry detection need vendor/device validation. Windows11_24H2 is an illustrative fleet requirement, not equivalent to the original v10_1607 setting. No installer has been downloaded."
+  "notes": "Adapted from the user-provided example; version, installer switches and registry detection need vendor/device validation. Windows11_24H2 is an illustrative fleet requirement, not equivalent to the original v10_1607 setting. No installer has been downloaded. The icon path is relative to apps/<AppId>/: for AppId notepadplusplus, supply apps/notepadplusplus/icon.png before building. Each version can use the same icon.png. Set intune.icon to an empty string to omit the icon. No Notepad++ icon file is included."
 }

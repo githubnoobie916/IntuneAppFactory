@@ -35,9 +35,11 @@ For the separate upload stage, see [UPLOADING.md](UPLOADING.md). `Upload-IntuneW
 Intune_App_Packaging/
   sources/PSAppDeployToolkit_Template_v4/   # original toolkit; read-only
   IntuneAppFactory/
-    apps/<AppId>/<Version>/
-      app.json
-      installers/                         # approved MSI/EXE and sidecar files
+    apps/<AppId>/
+      icon.png                            # optional shared icon for all versions
+      <Version>/
+        app.json
+        installers/                       # approved MSI/EXE and sidecar files
     scripts/
       Build-App.ps1                       # generate a PSADT package
       AppConfig.ps1                       # build-time validation and path checks
@@ -70,7 +72,9 @@ Only `Package/` is deployment content. The JSON snapshots and Intune metadata st
 
 ## Application JSON
 
-Use [apps/7zip/26.05/app.json](apps/7zip/26.05/app.json) as the basic example, or [examples/notepadplusplus.app.json](examples/notepadplusplus.app.json) for explicit upload settings. Root and PSADT fields listed below are required, even for disabled features. Missing required settings and unknown properties fail validation. Conditional installer selectors and detection fields apply only to their selected type. The additional `intune.informationUrl` and `intune.upload` fields are optional for compatibility with existing applications; upload defaults and overrides are documented in [UPLOADING.md](UPLOADING.md).
+For a new application, copy the entire [examples/notepadplusplus](examples/notepadplusplus) folder into `apps`, then rename and edit it for your app. The [example setup guide](examples/README.md) shows the shared icon location, version folder, installer location and optional PowerShell detection script. Supply your own PNG and approved installer before building.
+
+Use [apps/7zip/26.05/app.json](apps/7zip/26.05/app.json) as the basic example, or [examples/notepadplusplus/8.9.7/app.json](examples/notepadplusplus/8.9.7/app.json) for explicit upload settings. Root and PSADT fields listed below are required, even for disabled features. Missing required settings and unknown properties fail validation. Conditional installer selectors and detection fields apply only to their selected type. The additional `intune.informationUrl` and `intune.upload` fields are optional for compatibility with existing applications; upload defaults and overrides are documented in [UPLOADING.md](UPLOADING.md).
 
 The toolkit's own `Config/`, `Strings/`, and other resources are copied unchanged. This JSON controls the deployment settings exposed by the generator; it is not a replacement for every internal PSADT configuration option.
 
@@ -154,10 +158,10 @@ Generated management command strings leave the mode unspecified so you can choos
 The required fields are `displayName`, `description`, `installContext`, `detection`, and `icon`. Optional fields are `informationUrl` and `upload`.
 
 - `installContext`: `system` or `user`. Also maps to the native `RequireAdmin` value.
-- `icon`: PNG path relative to `apps/<AppId>/`, or `""` for no publishing icon. A configured file must exist at build time. PSADT UI assets remain separate.
+- `icon`: PNG path relative to `apps/<AppId>/`, or `""` for no publishing icon. Use `"icon": "icon.png"` in each version's JSON to share `apps/<AppId>/icon.png` across versions. A configured file must exist at build time. The builder snapshots it into each revision; replacing the shared image affects future builds. PSADT UI assets remain separate.
 - `detection`: `null` for no detection metadata, or an object with these required fields: MSI (`type`, `productCode`); file (`type`, `path`, `file`, `version`); registry (`type`, `key`, `valueName`, `value`); PowerShell (`type: "powershell"`, `scriptPath`, `runAs32Bit`, `enforceSignatureCheck`). The PowerShell path is relative to the application version directory; the builder snapshots the script for uploading. Registry value name/value may be empty strings. Registry rules additionally accept `operationType` and `operator` together, and optional boolean `check32BitOn64System`. See [PowerShell detection scripts](UPLOADING.md#powershell-detection-scripts) for an example, and the upload guide for registry version comparisons and supported operations.
 - `informationUrl`: optional HTTPS information page URL, or `""` to omit it. This does not download an installer.
-- `upload`: optional object requiring `deployMode`, `minimumSupportedWindowsRelease`, and `restartBehavior`. Optional `returnCodes` replaces the derived Intune return-code list; optional `transport` sets upload retry, chunk, SAS-renewal and wait settings. See the complete [Notepad++ JSON example](examples/notepadplusplus.app.json) and [configuration guide](UPLOADING.md#configure-uploading-in-appjson).
+- `upload`: optional object requiring `deployMode`, `minimumSupportedWindowsRelease`, and `restartBehavior`. Optional `returnCodes` replaces the derived Intune return-code list; optional `transport` sets upload retry, chunk, SAS-renewal and wait settings. See the complete [Notepad++ JSON example](examples/notepadplusplus/8.9.7/app.json) and [configuration guide](UPLOADING.md#configure-uploading-in-appjson).
 
 This metadata is recorded for publishing. The separate uploader maps it to Intune detection rules and can optionally assign the published app to one group. The 7-Zip example's detection still needs validation against the approved installer; preview validates its shape, not its behavior on a device.
 

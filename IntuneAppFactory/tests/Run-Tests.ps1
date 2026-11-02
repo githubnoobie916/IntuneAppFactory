@@ -62,7 +62,7 @@ try {
         Assert-Throws { Read-FactoryConfig $configPath } 'Unknown property.*deployMode'
     }
     Test-Case 'Optional upload JSON validates while legacy configuration stays supported' {
-        $example = Get-Content "$projectRoot/examples/notepadplusplus.app.json" -Raw | ConvertFrom-Json
+        $example = Get-Content "$projectRoot/examples/notepadplusplus/8.9.7/app.json" -Raw | ConvertFrom-Json
         Save-TestConfig $example
         $actual = Read-FactoryConfig $configPath
         Assert-True ($actual.intune.upload.returnCodes.Count -eq 4 -and $actual.intune.detection.operationType -eq 'version') 'Explicit upload configuration was lost.'
@@ -89,7 +89,7 @@ try {
             { param($c) $c.intune.detection.operator = 'notConfigured' },
             { param($c) $c.intune.detection.PSObject.Properties.Remove('operator') }
         )) {
-            $example = Get-Content "$projectRoot/examples/notepadplusplus.app.json" -Raw | ConvertFrom-Json
+            $example = Get-Content "$projectRoot/examples/notepadplusplus/8.9.7/app.json" -Raw | ConvertFrom-Json
             & $change $example
             Save-TestConfig $example
             Assert-Throws { Read-FactoryConfig $configPath } 'upload|Registry|informationUrl'

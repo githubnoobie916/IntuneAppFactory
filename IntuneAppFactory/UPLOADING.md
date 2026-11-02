@@ -17,7 +17,7 @@ Replace `intune.detection` in your source `app.json` with:
 }
 ```
 
-`scriptPath` is relative to the **application version directory**, beside `app.json`. For example, copy [Detect-NotepadPlusPlus.ps1](examples/Detect-NotepadPlusPlus.ps1) to `apps/notepadplusplus/8.9.7/detection/Detect-NotepadPlusPlus.ps1`. This is an example based on the supplied Notepad++ configuration; confirm its registry key and minimum version against your installer.
+`scriptPath` is relative to the **application version directory**, beside `app.json`. For example, copy [Detect-NotepadPlusPlus.ps1](examples/notepadplusplus/8.9.7/detection/Detect-NotepadPlusPlus.ps1) to `apps/notepadplusplus/8.9.7/detection/Detect-NotepadPlusPlus.ps1`. This is an example based on the supplied Notepad++ configuration; confirm its registry key and minimum version against your installer.
 
 | Setting | Meaning |
 | --- | --- |
@@ -49,7 +49,7 @@ Build a new revision and package it as usual, then preview the upload. The build
 
 ## Configure uploading in app.json
 
-Edit the application's source `apps/<AppId>/<Version>/app.json` before generating a new revision. The uploader reads the **generated revision's snapshot**, so changes to source JSON do not retroactively change existing output. Use [examples/notepadplusplus.app.json](examples/notepadplusplus.app.json) as a complete, validated example adapted from the supplied script. The installer/version/switches/detection in that example are user-provided values, not a tested vendor recipe.
+Edit the application's source `apps/<AppId>/<Version>/app.json` before generating a new revision. The uploader reads the **generated revision's snapshot**, so changes to source JSON do not retroactively change existing output. Use [examples/notepadplusplus/8.9.7/app.json](examples/notepadplusplus/8.9.7/app.json) as a complete, validated example adapted from the supplied script. The installer/version/switches/detection in that example are user-provided values, not a tested vendor recipe.
 
 The script's configuration maps to the factory as follows:
 
@@ -65,7 +65,7 @@ The script's configuration maps to the factory as follows:
 | `$installExperience` | `intune.installContext` and `intune.upload.restartBehavior`. |
 | `$returnCodes` | `intune.upload.returnCodes`. |
 | `$maxRetries`, `$blockSize`, `$sasRenewalThresholdMinutes` | `intune.upload.transport.maxRetries`, `blockSizeBytes`, `sasRenewalThresholdMinutes`. |
-| `$iconPath` | `intune.icon`: PNG path relative to `apps/<AppId>/`, or `""`. The generator copies it into the revision. |
+| `$iconPath` | `intune.icon`: PNG path relative to `apps/<AppId>/`, or `""`. Use `"icon.png"` to share the image directly under the app folder across all versions. The generator copies it into the revision. |
 | `$installerUrl`, `$contentPrepUrl` | Not upload JSON: supply the approved installer locally and use the existing pinned tool setup/packaging commands. |
 | `$root`, content/output/tool folders | Factory directory layout and `-RevisionPath` / optional `-IntuneWinPath`. |
 | Tenant/client ID, certificate or secret | Authentication command parameters or an existing SDK session. Credentials are not accepted in app JSON. |
@@ -78,7 +78,7 @@ For example, the `intune` section can be:
   "description": "Notepad++ is a free source code editor and Notepad replacement.",
   "informationUrl": "https://notepad-plus-plus.org/downloads/v8.9.7/",
   "installContext": "system",
-  "icon": "",
+  "icon": "icon.png",
   "detection": {
     "type": "registry",
     "key": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Notepad++",

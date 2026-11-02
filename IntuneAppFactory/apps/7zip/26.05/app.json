@@ -43,7 +43,7 @@
     "description": "7-Zip file archiver. Example configuration; validate against your approved installer.",
     "installContext": "system",
     "detection": { "type": "file", "path": "%ProgramFiles%\\7-Zip", "file": "7z.exe", "version": "26.05" },
-    "icon": ""
+    "icon": "icon.png"
   },
   "notes": "Example, not a production-certified recipe. Supply the official MSI. Uninstall uses that MSI, so no product code is invented. Review file version detection before publishing."
 }

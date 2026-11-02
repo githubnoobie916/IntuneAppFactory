@@ -127,7 +127,7 @@ try {
     }
     Test-Case 'JSON enum fields reject singleton arrays before Graph publication' {
         foreach ($field in @('deployMode','restartBehavior','returnCodeType','operationType','operator')) {
-            $example = Get-Content "$projectRoot/examples/notepadplusplus.app.json" -Raw | ConvertFrom-Json
+            $example = Get-Content "$projectRoot/examples/notepadplusplus/8.9.7/app.json" -Raw | ConvertFrom-Json
             switch ($field) {
                 'deployMode' { $example.intune.upload.deployMode = @('Silent') }
                 'restartBehavior' { $example.intune.upload.restartBehavior = @('suppress') }
