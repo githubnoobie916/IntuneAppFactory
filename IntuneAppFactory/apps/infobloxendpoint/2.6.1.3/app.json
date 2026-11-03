@@ -1,0 +1,148 @@
+{
+  "name": "Infoblox Endpoint",
+  "publisher": "infoblox",
+  "version": "2.6.1.3",
+  "architecture": "x64",
+  "language": "EN",
+  "revision": "01",
+  "install": [
+    {
+      "type": "MSI",
+      "path": "InfoBlox.msi",
+      "arguments": "/q"
+    }
+  ],
+  "uninstall": [
+    {
+      "type": "MSI",
+      "path": "InfoBlox.msi",
+      "arguments": "/q"
+    }
+  ],
+  "repair": [
+    {
+      "type": "MSI",
+      "path": "InfoBlox.msi",
+      "arguments": "/q"
+    }
+  ],
+  "additionalFiles": [],
+  "psadt": {
+    "processesToClose": [
+      {
+        "name": "infoblox_rc_control_application",
+        "description": "infoblox application"
+      },
+      {
+        "name": "infoblox_rc_service",
+        "description": "infoblox service"
+      }
+    ],
+    "allowDefer": true,
+    "deferTimes": 3,
+    "checkDiskSpace": true,
+    "persistPrompt": true,
+    "suppressRebootPassThru": false,
+    "terminalServerMode": false,
+    "disableLogging": false,
+    "scriptAuthor": "IntuneAppFactory",
+    "scriptVersion": "1.0.0",
+    "scriptDate": "2026-11-02",
+    "successExitCodes": [
+      0,
+      1707
+    ],
+    "rebootExitCodes": [
+      1641,
+      3010
+    ],
+    "installName": "Infoblox Endpoint Client",
+    "installTitle": "Infoblox Endpoint Client",
+    "completionPrompt": {
+      "message": "Infoblox Endpoint installation completed.",
+      "buttonRightText": "OK",
+      "noWait": true
+    }
+  },
+  "intune": {
+    "displayName": "Infoblox Endpoint",
+    "description": "Infoblox Endpoint client. Software required by San Francisco Department of Technology.",
+    "informationUrl": "https://docs.infoblox.com/",
+    "installContext": "system",
+    "icon": "icon.png",
+    "detection": {
+      "type": "powershell",
+      "scriptPath": "detection/detectionscript.ps1",
+      "runAs32Bit": false,
+      "enforceSignatureCheck": false
+    },
+    "upload": {
+      "deployMode": "Auto",
+      "minimumSupportedWindowsRelease": "1809",
+      "restartBehavior": "allow",
+      "returnCodes": [
+        {
+          "returnCode": 0,
+          "type": "success"
+        },
+        {
+          "returnCode": 1707,
+          "type": "success"
+        },
+        {
+          "returnCode": 3010,
+          "type": "softReboot"
+        },
+        {
+          "returnCode": 1641,
+          "type": "hardReboot"
+        },
+        {
+          "returnCode": 1618,
+          "type": "retry"
+        },
+        {
+          "returnCode": 60001,
+          "type": "failed"
+        },
+        {
+          "returnCode": 60008,
+          "type": "failed"
+        },
+        {
+          "returnCode": 60010,
+          "type": "failed"
+        },
+        {
+          "returnCode": 60011,
+          "type": "failed"
+        },
+        {
+          "returnCode": 1602,
+          "type": "retry"
+        }
+      ],
+      "transport": {
+        "maxRetries": 10,
+        "blockSizeBytes": 4194304,
+        "sasRenewalThresholdMinutes": 5,
+        "timeoutSeconds": 900
+      },
+      "maxRunTimeInMinutes": 15,
+      "minimumFreeDiskSpaceInMB": 500,
+      "minimumMemoryInMB": 0,
+      "minimumNumberOfProcessors": 0,
+      "minimumCpuSpeedInMHz": 0
+    },
+    "displayVersion": "2.6.1.3",
+    "developer": "Infoblox",
+    "owner": "San Francisco Department of Technology",
+    "privacyInformationUrl": "",
+    "notes": "",
+    "isFeatured": false,
+    "allowAvailableUninstall": false,
+    "categoryIds": [],
+    "roleScopeTagIds": []
+  },
+  "notes": "Upload settings follow the working GlobalProtect reference. Supply the approved GlobalProtect.msi locally. categoryIds and roleScopeTagIds are tenant-specific; populate them before building if required. Detection checks product {CD809CD6-9D01-417E-9E76-D19EEE77E74F} and version 6.3.3; validate against the approved installer."
+}
