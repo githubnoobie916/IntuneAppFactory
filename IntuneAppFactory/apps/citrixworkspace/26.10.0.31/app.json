@@ -1,0 +1,128 @@
+{
+  "name": "Citrix Workspace",
+  "publisher": "Citrix",
+  "version": "26.10.0.31",
+  "architecture": "x64",
+  "language": "EN",
+  "revision": "01",
+  "install": [
+    { "type": "EXE", "path": "CitrixWorkspaceFullInstaller_x64.exe", "arguments": "/cleaninstall /silent /AutoUpdateCheck=Auto /AutoUpdateStream=LTSR" }
+  ],
+  "uninstall": [
+    { "type": "EXE", "path": "CitrixWorkspaceFullInstaller_x64.exe", "arguments": "/silent" }
+  ],
+  "repair": [],
+  "additionalFiles": [],
+  "psadt": {
+    "processesToClose": [
+      {
+        "name": "UpdaterService",
+        "description": "Citrix Update Service"
+      },
+      {
+        "name": "AuthManSvr",
+        "description": "Citrix Auth Service"
+      },
+      {
+        "name": "SelfServicePlugin",
+        "description": "Citrx Plugin"
+      },
+      {
+        "name": "receiver",
+        "description": "Citrix Receiver"
+      },
+      {
+        "name": "SelfService",
+        "description": "Citrix Service"
+      }
+    ],
+    "closeProcesses": false,
+    "allowDefer": true,
+    "deferTimes": 3,
+    "checkDiskSpace": true,
+    "persistPrompt": true,
+    "suppressRebootPassThru": false,
+    "terminalServerMode": false,
+    "disableLogging": false,
+    "scriptAuthor": "IntuneAppFactory",
+    "scriptVersion": "1.0.0",
+    "scriptDate": "2026-11-02",
+    "successExitCodes": [0],
+    "rebootExitCodes": [1641, 3010],
+    "installName": "Citrix Workspace",
+    "installTitle": "Citrix Workspace",
+    "completionPrompt": {
+      "enabled": true,
+      "message": "Citrix Workspace installation completed.",
+      "buttonRightText": "OK",
+      "noWait": true
+    }
+  },
+  "intune": {
+    "displayName": "Citrix Workspace (x64)",
+    "description": "Citrix Workspace client.",
+    "informationUrl": "https://docs.citrix.com/us/en/citrix-workspace-app-for-windows/2610/citrix-workspace-app-for-windows.html",
+    "installContext": "system",
+    "icon": "citrixworkspace-icon.png",
+    "detection": {
+      "type": "powershell",
+      "scriptPath": "detection/detectionscript.ps1",
+      "runAs32Bit": false,
+      "enforceSignatureCheck": false
+    },
+    "upload": {
+      "deployMode": "Auto",
+      "minimumSupportedWindowsRelease": "1809",
+      "restartBehavior": "suppress",
+      "returnCodes": [
+        {
+          "returnCode": 0,
+          "type": "success"
+        },
+        {
+          "returnCode": 1707,
+          "type": "success"
+        },
+        {
+          "returnCode": 3010,
+          "type": "softReboot"
+        },
+        {
+          "returnCode": 1641,
+          "type": "hardReboot"
+        },
+        {
+          "returnCode": 1618,
+          "type": "retry"
+        },
+        {
+          "returnCode": 60001,
+          "type": "failed"
+        },
+        {
+          "returnCode": 60008,
+          "type": "failed"
+        },
+        {
+          "returnCode": 60010,
+          "type": "failed"
+        },
+        {
+          "returnCode": 60011,
+          "type": "failed"
+        },
+        {
+          "returnCode": 1602,
+          "type": "retry"
+        }
+      ],
+      "transport": {
+        "maxRetries": 10,
+        "blockSizeBytes": 4194304,
+        "sasRenewalThresholdMinutes": 5,
+        "timeoutSeconds": 900
+      }
+    }
+  },
+  "notes": "Adapted from the user-provided example; version, installer switches and registry detection need vendor/device validation. Windows11_24H2 is an illustrative fleet requirement, not equivalent to the original v10_1607 setting. No installer has been downloaded. The icon path is relative to apps/<AppId>/: for AppId notepadplusplus, supply apps/notepadplusplus/icon.png before building. Each version can use the same icon.png. Set intune.icon to an empty string to omit the icon. No Notepad++ icon file is included."
+}

@@ -130,6 +130,7 @@ function Install-ADTDeployment
         DeferTimes = 3
         CheckDiskSpace = $true
         PersistPrompt = $true
+        DeferRunInterval = ([TimeSpan]::Fromhours(4))
     }
     if ($adtSession.AppProcessesToClose.Count -gt 0)
     {

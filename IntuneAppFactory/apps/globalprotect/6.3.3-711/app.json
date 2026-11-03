@@ -9,21 +9,21 @@
     {
       "type": "MSI",
       "path": "GlobalProtect.msi",
-      "arguments": "/passive PORTAL=ccsf-vpn.sf.gov CONNECTMETHOD=on-demand"
+      "arguments": "/q PORTAL=ccsf-vpn.sf.gov CONNECTMETHOD=on-demand"
     }
   ],
   "uninstall": [
     {
       "type": "MSI",
       "path": "GlobalProtect.msi",
-      "arguments": "/passive /uninstall"
+      "arguments": "/q"
     }
   ],
   "repair": [
     {
       "type": "MSI",
       "path": "GlobalProtect.msi",
-      "arguments": "/f GlobalProtect.msi PORTAL=ccsf-vpn.sf.gov CONNECTMETHOD=on-demand /q"
+      "arguments": "/q PORTAL=ccsf-vpn.sf.gov CONNECTMETHOD=on-demand /q"
     }
   ],
   "additionalFiles": [],
