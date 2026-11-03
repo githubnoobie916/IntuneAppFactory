@@ -67,7 +67,7 @@ The script's configuration maps to the factory as follows:
 | `$maxRetries`, `$blockSize`, `$sasRenewalThresholdMinutes` | `intune.upload.transport.maxRetries`, `blockSizeBytes`, `sasRenewalThresholdMinutes`. |
 | `$iconPath` | `intune.icon`: PNG path relative to `apps/<AppId>/`, or `""`. Use `"icon.png"` to share the image directly under the app folder across all versions. The generator copies it into the revision. |
 | `$installerUrl`, `$contentPrepUrl` | Not upload JSON: supply the approved installer locally and use the existing pinned tool setup/packaging commands. |
-| `$root`, content/output/tool folders | Factory directory layout and `-RevisionPath` / optional `-IntuneWinPath`. |
+| `$root`, content/output/tool folders | Factory directory layout selected by `-AppName`, `-Version`, and `-Revision`, or explicit `-RevisionPath`; optional `-IntuneWinPath`. |
 | Tenant/client ID, certificate or secret | Authentication command parameters or an existing SDK session. Credentials are not accepted in app JSON. |
 
 For example, the `intune` section can be:
@@ -129,15 +129,35 @@ To use the full Notepad++ example, copy it to `apps/notepadplusplus/8.9.7/app.js
 
 ```powershell
 .\scripts\Build-App.ps1 -AppName notepadplusplus -Version 8.9.7 -ValidateOnly
-.\scripts\Build-App.ps1 -AppName notepadplusplus -Version 8.9.7 -Revision 01
+.\scripts\Build-App.ps1 -AppName notepadplusplus -Version 8.9.7 -Revision '01'
 # Review the generated deployment before packaging.
-.\scripts\New-IntuneWin.ps1 -SourcePath '.\output\notepadplusplus\8.9.7\rev-01\Package'
-$plan = .\scripts\Upload-IntuneWin.ps1 -RevisionPath '.\output\notepadplusplus\8.9.7\rev-01' -Preview
-$plan | ConvertTo-Json -Depth 20
+.\scripts\New-IntuneWin.ps1 -AppName notepadplusplus -Version 8.9.7 -Revision '01'
+# Optional local review, displayed as JSON in one command:
+.\scripts\Upload-IntuneWin.ps1 -AppName notepadplusplus -Version 8.9.7 -Revision '01' -Preview -AsJson
 
 # Live upload, using the same JSON settings:
-.\scripts\Upload-IntuneWin.ps1 -RevisionPath '.\output\notepadplusplus\8.9.7\rev-01' -TenantId '<tenant-guid>'
+.\scripts\Upload-IntuneWin.ps1 -AppName notepadplusplus -Version 8.9.7 -Revision '01' -TenantId '<tenant-guid>'
 ```
+
+To avoid repeating the identifiers, use PowerShell splatting for the same workflow:
+
+```powershell
+$app = @{
+    AppName = 'notepadplusplus'
+    Version = '8.9.7'
+    Revision = '01'
+}
+
+.\scripts\Build-App.ps1 @app
+# Review the generated deployment before packaging.
+.\scripts\New-IntuneWin.ps1 @app
+.\scripts\Upload-IntuneWin.ps1 @app -Preview -AsJson
+.\scripts\Upload-IntuneWin.ps1 @app -TenantId '<tenant-guid>'
+```
+
+These are alternative examples of the same workflow; do not run both to build or publish the same revision twice. Each successful build prints the packaging, optional JSON preview, and live upload commands with the actual app/version/revision and quoted absolute script paths. Copy those commands after reviewing the deployment; replace `<tenant-guid>` before live upload. Commands are only displayed, not executed. Validation-only runs and failed builds do not print them. Preview and upload require PowerShell 7.2 or later.
+
+Both packaging and uploading require all three app identifiers, including an explicit `-Revision`. `-AppVersion` aliases `-Version`. Selection resolves `output/<AppName>/<Version>/rev-<Revision>` relative to the factory directory and checks its `build.json` identity. Use the exact 1-4 digit revision string: `'01'` and `'1'` identify different directories. No latest revision or source JSON default is inferred; upload settings still come from the selected revision's saved JSON.
 
 No Notepad++ installer was downloaded or package published when adding this example. Group assignment remains an explicit command-line choice using `-GroupId` and `-AssignmentIntent`.
 
@@ -163,22 +183,34 @@ Run from `IntuneAppFactory` in PowerShell 7. Choose the revision you reviewed. A
 
 ```powershell
 # Run if this revision has not yet been packaged.
-.\scripts\New-IntuneWin.ps1 -SourcePath '.\output\7zip\26.05\rev-05\Package'
+.\scripts\New-IntuneWin.ps1 -AppName 7zip -Version 26.05 -Revision '05'
 
 $upload = @{
-    RevisionPath = '.\output\7zip\26.05\rev-05'
+    AppName = '7zip'
+    Version = '26.05'
+    Revision = '05'
     DeployMode = 'Silent'
     MinimumSupportedWindowsRelease = 'Windows11_23H2'
     RestartBehavior = 'basedOnReturnCode'
 }
 
 # Local validation only; no Graph module, sign-in, receipt, or network needed.
-$plan = .\scripts\Upload-IntuneWin.ps1 @upload -Preview
-$plan | ConvertTo-Json -Depth 20
+.\scripts\Upload-IntuneWin.ps1 @upload -Preview -AsJson
 
 # WhatIf also returns the local plan without signing in.
 .\scripts\Upload-IntuneWin.ps1 @upload -WhatIf
 ```
+
+Preview is optional: live upload generates and validates its own plan. `-Preview -AsJson` returns one JSON string with depth 20. For automation that needs an object, use `$plan = .\scripts\Upload-IntuneWin.ps1 @upload -Preview`; `-WhatIf` also preserves object output. `-AsJson` requires `-Preview` and cannot be used for live upload or with `-WhatIf` alone.
+
+Existing path-based commands remain available for custom locations. Choose either app identifiers or an explicit path, not both. For example, given a generated revision saved under `D:\Packages\MyApp\rev-01` with its upload settings in JSON:
+
+```powershell
+.\scripts\New-IntuneWin.ps1 -SourcePath 'D:\Packages\MyApp\rev-01\Package' -OutputPath 'D:\Packages\MyApp\Archives'
+.\scripts\Upload-IntuneWin.ps1 -RevisionPath 'D:\Packages\MyApp\rev-01' -IntuneWinPath 'D:\Packages\MyApp\Archives\Invoke-AppDeployToolkit.intunewin' -Preview -AsJson
+```
+
+Packaging overrides (`-OutputPath`, `-SetupFile`, `-ToolPath`, `-TimeoutSeconds`, `-Force`) and upload overrides, including `-IntuneWinPath`, work with either selection mode. When packaging to a custom output directory, supply the matching archive path to the uploader.
 
 The Windows release above is an example requirement, not a recommendation for your device fleet. Choose the supported release appropriate to your organization, in Graph's notation (for example `Windows11_23H2`; Windows 10 releases use `22H2` notation). Release values are checked locally against the shared release list in AppConfig.ps1; Intune remains authoritative for service support. The release and restart behavior must be chosen either in `intune.upload` or on the command line. Deployment mode defaults to `Auto`. Interactive PSADT UI needs testing in the actual Intune execution context; use the mode appropriate to your deployment.
 
@@ -267,13 +299,12 @@ From `IntuneAppFactory`, supply `apps/globalprotect/6.3.3-711/installers/GlobalP
 ```powershell
 .\scripts\Install-UploadDependencies.ps1
 .\scripts\Build-App.ps1 -AppName globalprotect -Version 6.3.3-711 -ValidateOnly
-.\scripts\Build-App.ps1 -AppName globalprotect -Version 6.3.3-711 -Revision 02
+.\scripts\Build-App.ps1 -AppName globalprotect -Version 6.3.3-711 -Revision '02'
 # Review the generated PSADT script before packaging.
-.\scripts\New-IntuneWin.ps1 -SourcePath '.\output\globalprotect\6.3.3-711\rev-02\Package'
-$plan = .\scripts\Upload-IntuneWin.ps1 -RevisionPath '.\output\globalprotect\6.3.3-711\rev-02' -Preview
-$plan | ConvertTo-Json -Depth 20
+.\scripts\New-IntuneWin.ps1 -AppName globalprotect -Version 6.3.3-711 -Revision '02'
+.\scripts\Upload-IntuneWin.ps1 -AppName globalprotect -Version 6.3.3-711 -Revision '02' -Preview -AsJson
 # Creates an unassigned app in the specified tenant:
-.\scripts\Upload-IntuneWin.ps1 -RevisionPath '.\output\globalprotect\6.3.3-711\rev-02' -TenantId '<tenant-guid>'
+.\scripts\Upload-IntuneWin.ps1 -AppName globalprotect -Version 6.3.3-711 -Revision '02' -TenantId '<tenant-guid>'
 ```
 
 The create-new uploader will stop if the manually published app already has this display name. Review that existing app and prior receipts before retrying. A new revision is needed after changing application configuration; source edits do not alter existing revision snapshots.

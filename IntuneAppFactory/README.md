@@ -6,24 +6,26 @@ Every generation starts with `../sources/PSAppDeployToolkit_Template_v4`. That s
 
 ## Workflow
 
-Run these commands from `IntuneAppFactory` in PowerShell on Windows. PowerShell 7 is recommended for long paths; the scripts also support Windows PowerShell 5.1 and report legacy path-length limits.
+Run these commands from `IntuneAppFactory` in PowerShell on Windows. Build and packaging support Windows PowerShell 5.1 and report legacy path-length limits; PowerShell 7 is recommended for long paths. Upload and preview require PowerShell 7.2 or later.
 
 ```powershell
 # Validate JSON only. No output, installers, toolkit, or packaging tool required.
 .\scripts\Build-App.ps1 -AppName 7zip -Version 26.05 -ValidateOnly
 
 # Generate a new revision. Choose an unused revision to preserve earlier output.
-.\scripts\Build-App.ps1 -AppName 7zip -Version 26.05 -Revision 04
+.\scripts\Build-App.ps1 -AppName 7zip -Version 26.05 -Revision '04'
 
 # Review/edit output\7zip\26.05\rev-04\Package\Invoke-AppDeployToolkit.ps1.
 
 # Package that exact folder separately, including your reviewed edits.
-.\scripts\New-IntuneWin.ps1 -SourcePath '.\output\7zip\26.05\rev-04\Package'
+.\scripts\New-IntuneWin.ps1 -AppName 7zip -Version 26.05 -Revision '04'
 ```
 
-Generation never executes an installer, downloads files, creates `.intunewin`, or publishes to Intune. Packaging does not regenerate the deployment. An absolute path to either script also works from another working directory.
+Generation never executes an installer, downloads files, creates `.intunewin`, or publishes to Intune. Packaging does not regenerate the deployment. App-based selection resolves output relative to the factory directory, so an absolute script path also works from another working directory.
 
-For the separate upload stage, see [UPLOADING.md](UPLOADING.md). `Upload-IntuneWin.ps1` reads a current revision's metadata and existing archive, supports offline `-Preview` / `-WhatIf`, and uses Microsoft Graph to create and upload a new Win32 app. Group assignment is optional and explicit. Uploading requires PowerShell 7.2 or later; existing generation and packaging retain their Windows PowerShell 5.1 support.
+After each successful build, including a forced rebuild, Build prints ready-to-copy packaging, optional JSON preview, and live upload commands for the revision it actually generated. The commands use quoted absolute script paths, preserve leading zeros, and do not run automatically. Review the generated deployment before packaging, use PowerShell 7.2 or later for preview/upload, and replace `<tenant-guid>` with your tenant ID before live upload. `-ValidateOnly` and failed builds do not print next-step commands. Capturing the build result in a variable still returns the original object; the commands are informational output.
+
+For the separate upload stage, see [UPLOADING.md](UPLOADING.md). `Upload-IntuneWin.ps1` accepts the same app identifiers, reads a current revision's metadata and existing archive, supports offline `-Preview` / `-WhatIf`, and uses Microsoft Graph to create and upload a new Win32 app. Use `-Preview -AsJson` to display the full plan in one command. Plain `-Preview` and `-WhatIf` return an object. Preview is optional; live upload performs its own validation. Group assignment is optional and explicit.
 
 `Build-App.ps1 -Force` explicitly regenerates an existing recognized revision, replacing manual edits and any artifacts inside that revision. A failed generation preserves the previous revision. Without `-Force`, an existing revision is an error. `-Revision` overrides the JSON revision in the output snapshot without changing the source JSON.
 
@@ -181,7 +183,15 @@ The existing local tool is used without network access. To set it up on another 
 
 See [tools/README.md](tools/README.md) for the pinned tool, hash, signature verification, and update procedure. Neither generation nor packaging downloads it automatically.
 
-`New-IntuneWin.ps1` accepts `-SourcePath`, `-OutputPath`, `-SetupFile`, `-ToolPath`, `-TimeoutSeconds`, and `-Force`. Its default output is an `IntuneWin/` folder beside the source. It supports root PSADT v4 and v3 launchers; if both exist, specify `-SetupFile`. Output and the packaging tool must be outside the source. Existing archives within the source, junctions/symlinks, tool failures, timeouts, and invalid resulting archives are rejected. Logs are retained beside successful archives. Packaging does not update the generation-time `build.json`.
+`New-IntuneWin.ps1` accepts either all three `-AppName`, `-Version`, and `-Revision` identifiers, or `-SourcePath`. Do not combine these selection modes. `-AppVersion` is an alias for `-Version`. App selection requires a matching generated `build.json` and packages `output/<AppName>/<Version>/rev-<Revision>/Package`. Revision is an exact string of 1-4 digits: `'01'` selects `rev-01`, while `'1'` selects `rev-1`. Packaging and uploading require an explicit revision in app mode; they never choose the latest build or read a revision default from current source JSON.
+
+Both packaging modes support `-OutputPath`, `-SetupFile`, `-ToolPath`, `-TimeoutSeconds`, and `-Force`. The default output is an `IntuneWin/` folder beside the source. Existing path-based commands remain supported, including standalone PSADT v3/v4 folders without factory metadata:
+
+```powershell
+.\scripts\New-IntuneWin.ps1 -SourcePath 'D:\Packages\MyApp\Package' -OutputPath 'D:\Packages\MyApp\IntuneWin'
+```
+
+If both v3 and v4 launchers exist, specify `-SetupFile`. Output and the packaging tool must be outside the source. Existing archives within the source, junctions/symlinks, tool failures, timeouts, and invalid resulting archives are rejected. Logs are retained beside successful archives. Packaging does not update the generation-time `build.json`.
 
 ## Migration and maintenance
 
@@ -197,6 +207,7 @@ Builds use staging and a revision lock, preserving previous output if generation
 
 ```powershell
 .\tests\Run-Tests.ps1
+.\tests\Run-IntuneWinTests.ps1
 .\tests\Run-Tests.ps1 -WithRealTool
 .\tests\Run-IntuneWinTests.ps1 -WithRealTool
 # PowerShell 7.2+; mocked network, no tenant changes:
