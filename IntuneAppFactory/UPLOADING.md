@@ -157,7 +157,7 @@ $app = @{
 
 These are alternative examples of the same workflow; do not run both to build or publish the same revision twice. Each successful build prints the packaging, optional JSON preview, and live upload commands with the actual app/version/revision and quoted absolute script paths. Copy those commands after reviewing the deployment; replace `<tenant-guid>` before live upload. Commands are only displayed, not executed. Validation-only runs and failed builds do not print them. Preview and upload require PowerShell 7.2 or later.
 
-Both packaging and uploading require all three app identifiers, including an explicit `-Revision`. `-AppVersion` aliases `-Version`. Selection resolves `output/<AppName>/<Version>/rev-<Revision>` relative to the factory directory and checks its `build.json` identity. Use the exact 1-4 digit revision string: `'01'` and `'1'` identify different directories. No latest revision or source JSON default is inferred; upload settings still come from the selected revision's saved JSON.
+Both packaging and uploading require all three app identifiers, including an explicit `-Revision`. `-AppVersion` aliases `-Version`. Selection resolves `apps/<AppName>/<Version>/output/rev-<Revision>` relative to the factory directory and checks its `build.json` identity. Use the exact 1-4 digit revision string: `'01'` and `'1'` identify different directories. No latest revision or source JSON default is inferred; upload settings still come from the selected revision's saved JSON.
 
 No Notepad++ installer was downloaded or package published when adding this example. Group assignment remains an explicit command-line choice using `-GroupId` and `-AssignmentIntent`.
 
@@ -179,7 +179,7 @@ This implementation targets the **Global/public cloud**. It does not configure a
 
 ## Package and preview
 
-Run from `IntuneAppFactory` in PowerShell 7. Choose the revision you reviewed. A current revision contains `app.json` and `build.json` alongside `Package/`.
+Run from `IntuneAppFactory` in PowerShell 7. Choose the revision you reviewed under `apps/<AppName>/<Version>/output/rev-<Revision>`. Each revision contains `app.json` and `build.json` alongside `Package/`. Edit the source `apps/<AppName>/<Version>/app.json` before building; the revision's copy saves the effective settings for upload. `build.json` records build identity, commands, and generated asset metadata. Upload requires both files and checks their revisions and Intune settings agree.
 
 ```powershell
 # Run if this revision has not yet been packaged.
@@ -212,9 +212,19 @@ Existing path-based commands remain available for custom locations. Choose eithe
 
 Packaging overrides (`-OutputPath`, `-SetupFile`, `-ToolPath`, `-TimeoutSeconds`, `-Force`) and upload overrides, including `-IntuneWinPath`, work with either selection mode. When packaging to a custom output directory, supply the matching archive path to the uploader.
 
+Existing builds under the former `output/<AppName>/<Version>/rev-<Revision>` location remain untouched. App-name selection does not fall back to that location. Use explicit paths for those builds: `-SourcePath` selects the revision's `Package` folder, while `-RevisionPath` selects the revision folder containing `app.json` and `build.json`.
+
+```powershell
+# Package only if this old revision does not already have an archive.
+.\scripts\New-IntuneWin.ps1 -SourcePath '.\output\7zip\26.05\rev-05\Package'
+.\scripts\Upload-IntuneWin.ps1 -RevisionPath '.\output\7zip\26.05\rev-05' -DeployMode Silent -MinimumSupportedWindowsRelease Windows11_23H2 -RestartBehavior basedOnReturnCode -Preview -AsJson
+```
+
+`Build-App.ps1 -Force` replaces the entire selected revision in the new layout, including manual edits, packaged archives, and upload receipts. It leaves source configuration, installers, other revisions, and builds at the old location unchanged.
+
 The Windows release above is an example requirement, not a recommendation for your device fleet. Choose the supported release appropriate to your organization, in Graph's notation (for example `Windows11_23H2`; Windows 10 releases use `22H2` notation). Release values are checked locally against the shared release list in AppConfig.ps1; Intune remains authoritative for service support. The release and restart behavior must be chosen either in `intune.upload` or on the command line. Deployment mode defaults to `Auto`. Interactive PSADT UI needs testing in the actual Intune execution context; use the mode appropriate to your deployment.
 
-During implementation, revision 05 was packaged locally and its upload preview verified. Its archive now exists; skip the packaging command for that unchanged revision. After editing package content, explicitly repackage with `New-IntuneWin.ps1 -Force`, then preview again.
+Revision 05 was previously packaged locally at the old output location and its upload preview verified. If you are using that existing build, select it with the explicit paths above and skip packaging its unchanged archive. The app-name example selects a separately built revision in the new layout. After editing package content, explicitly repackage with `New-IntuneWin.ps1 -Force`, then preview again.
 
 `-IntuneWinPath` can select an archive stored elsewhere. You are responsible for pairing it with the matching revision. Encryption metadata identifies the setup file and sizes, but cannot prove which application is inside. Packaging and uploading never execute the installer. Preview does not verify detection against an installed application or test tenant permissions.
 

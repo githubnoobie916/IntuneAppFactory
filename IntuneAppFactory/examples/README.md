@@ -43,4 +43,6 @@ From the `IntuneAppFactory` directory, after copying the folder:
 .\scripts\Build-App.ps1 -AppName notepadplusplus -Version 8.9.7 -Revision 01
 ```
 
-For another version, duplicate the version subfolder and update its JSON, installer and detection version. Keep the shared icon in the app folder. See [the upload guide](../UPLOADING.md) for packaging, preview and publication.
+The generated revision is saved to `apps/notepadplusplus/8.9.7/output/rev-01/`. Review its `Package/Invoke-AppDeployToolkit.ps1` before packaging. Keep the generated `app.json` and `build.json` alongside `Package`; they preserve the revision's configuration and build metadata for upload.
+
+For another version, copy the source configuration, installers, and detection files into a new version subfolder, excluding any generated `output/` folder. Update its JSON, installer and detection version. Keep the shared icon in the app folder. See [the upload guide](../UPLOADING.md) for packaging, preview and publication.

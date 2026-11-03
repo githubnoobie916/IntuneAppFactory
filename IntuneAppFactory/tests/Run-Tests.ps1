@@ -259,10 +259,19 @@ try {
         $config.repair = @([pscustomobject]@{type='EXE';path='repair.exe';arguments='/repair'})
         $config | ConvertTo-Json -Depth 20 | Set-Content "$fixtureRoot/apps/Fixture/26.05/app.json" -Encoding UTF8
         foreach ($name in @('7z2605-x64.msi','setup.exe','repair.exe')) { Set-Content "$fixtureRoot/apps/Fixture/26.05/installers/$name" 'Inert test payload; never execute.' }
+        $script:sourceConfigHash = (Get-FileHash "$fixtureRoot/apps/Fixture/26.05/app.json").Hash
+        $script:installerSnapshot = Get-TreeSnapshot "$fixtureRoot/apps/Fixture/26.05/installers"
+        $script:oldOutput = Join-Path $fixtureRoot 'output/Fixture/26.05/rev-01'
+        New-Item -ItemType Directory -Path $oldOutput -Force | Out-Null
+        Set-Content "$oldOutput/keep.txt" 'Existing output must remain untouched.'
+        $script:oldOutputSnapshot = Get-TreeSnapshot $oldOutput
         $script:builder = "$fixtureRoot/scripts/Build-App.ps1"
         Push-Location $sandbox
         try { $script:built = & $builder -AppName Fixture -Version 26.05 -InformationVariable buildMessages }
         finally { Pop-Location }
+        Assert-True ($built.OutputPath -eq [IO.Path]::GetFullPath("$fixtureRoot/apps/Fixture/26.05/output/rev-01")) 'Build was not placed inside its application version.'
+        Assert-True ($built.PackagePath -eq (Join-Path $built.OutputPath 'Package')) 'Package path does not match the selected revision.'
+        Assert-True ((Get-FileHash "$fixtureRoot/apps/Fixture/26.05/app.json").Hash -eq $sourceConfigHash) 'Build changed source configuration.'
         Assert-True (Test-Path "$($built.PackagePath)/Files/repair.exe") 'Repair-only payload was not copied.'
         Assert-True (-not (Test-Path "$($built.PackagePath)/app.json") -and -not (Test-Path "$($built.PackagePath)/SupportFiles/Factory")) 'Runtime factory files were shipped.'
         Assert-True (Test-Path "$($built.OutputPath)/app.json") 'Build configuration snapshot missing.'
@@ -295,7 +304,7 @@ try {
             Assert-True ((Get-FileHash $snapshot).Hash -eq $metadata.detectionScript.sha256) 'Source changes affected existing revision.'
             Remove-Item $scriptPath
             Assert-Throws { & $builder -AppName Fixture -Version 26.05 -Revision '89' } 'not found'
-            Assert-True (-not (Test-Path "$fixtureRoot/output/Fixture/26.05/rev-89")) 'Missing script left output.'
+            Assert-True (-not (Test-Path "$fixtureRoot/apps/Fixture/26.05/output/rev-89")) 'Missing script left output.'
         } finally { Set-Content $appConfigPath $originalConfig -Encoding UTF8 }
     }
     Test-Case 'Detection script validation rejects empty, invalid UTF-8 and invalid PowerShell without executing' {
@@ -483,7 +492,7 @@ try {
     }
     Test-Case 'Validation alone writes no package and generation has no packaging parameters' {
         $result = & $builder -AppName Fixture -Version 26.05 -Revision 90 -ValidateOnly -InformationVariable validationMessages
-        Assert-True ($result.Status -eq 'ConfigurationValid' -and -not (Test-Path "$fixtureRoot/output/Fixture/26.05/rev-90")) 'Validation wrote output.'
+        Assert-True ($result.Status -eq 'ConfigurationValid' -and -not (Test-Path "$fixtureRoot/apps/Fixture/26.05/output/rev-90")) 'Validation wrote output.'
         Assert-True (@($validationMessages | Where-Object { $_.MessageData.ToString() -like '& *' }).Count -eq 0) 'Validation printed next-step commands.'
         $parameters = (Get-Command $builder).Parameters
         Assert-True (-not $parameters.ContainsKey('CreateIntuneWin') -and -not $parameters.ContainsKey('IntuneWinToolPath')) 'Builder still offers integrated packaging.'
@@ -505,10 +514,15 @@ try {
         Assert-True ((Get-TreeSnapshot $built.OutputPath) -ceq $before) 'New revision changed prior output.'
         Assert-True ((Get-FileHash "$fixtureRoot/apps/Fixture/26.05/app.json").Hash -eq $inputHash) 'Revision override changed source JSON.'
         Assert-True ((Get-Content "$($next.OutputPath)/app.json" -Raw | ConvertFrom-Json).revision -eq '02') 'Revision override missing from snapshot.'
+        $nextSnapshot = Get-TreeSnapshot $next.OutputPath
         $forced = & $builder -AppName Fixture -Version 26.05 -Force -InformationVariable forcedMessages
         Assert-True ($forced -is [pscustomobject]) 'Forced build changed the result type.'
         Assert-BuildNextCommands $forcedMessages '01' $fixtureRoot
         Assert-True ((Get-TreeSnapshot $built.OutputPath) -ceq $before) 'Repeated generation changed identical output.'
+        Assert-True ((Get-FileHash "$fixtureRoot/apps/Fixture/26.05/app.json").Hash -eq $inputHash) 'Forced build changed source configuration.'
+        Assert-True ((Get-TreeSnapshot "$fixtureRoot/apps/Fixture/26.05/installers") -ceq $installerSnapshot) 'Build changed source installers.'
+        Assert-True ((Get-TreeSnapshot $oldOutput) -ceq $oldOutputSnapshot) 'Build changed old output.'
+        Assert-True ((Get-TreeSnapshot $next.OutputPath) -ceq $nextSnapshot) 'Forced rebuild changed another revision.'
     }
     Test-Case 'Missing payloads and failed rendering preserve prior output and clean staging' {
         $before = Get-TreeSnapshot $built.OutputPath
@@ -525,7 +539,7 @@ try {
         }
         finally { [IO.File]::WriteAllBytes($template,$bytes) }
         Assert-True ((Get-TreeSnapshot $built.OutputPath) -ceq $before) 'Failed build damaged prior output.'
-        Assert-True (@(Get-ChildItem "$fixtureRoot/output/Fixture/26.05" -Force | Where-Object Name -Match '^\.(stage-|backup-|rev-)').Count -eq 0) 'Failed build left staging/lock files.'
+        Assert-True (@(Get-ChildItem "$fixtureRoot/apps/Fixture/26.05/output" -Force | Where-Object Name -Match '^\.(stage-|backup-|rev-)').Count -eq 0) 'Failed build left staging/lock files.'
     }
     Test-Case 'Failed publish restores the previous package and unrelated output is protected' {
         $before = Get-TreeSnapshot $built.OutputPath
@@ -536,13 +550,13 @@ try {
         }
         Assert-Throws { & $builder -AppName Fixture -Version 26.05 -Force } 'Simulated publish failure'
         Assert-True ((Get-TreeSnapshot $built.OutputPath) -ceq $before) 'Publish rollback failed.'
-        New-Item -ItemType Directory "$fixtureRoot/output/Fixture/26.05/rev-99" | Out-Null
-        Set-Content "$fixtureRoot/output/Fixture/26.05/rev-99/keep.txt" 'Keep'
+        New-Item -ItemType Directory "$fixtureRoot/apps/Fixture/26.05/output/rev-99" | Out-Null
+        Set-Content "$fixtureRoot/apps/Fixture/26.05/output/rev-99/keep.txt" 'Keep'
         Assert-Throws { & $builder -AppName Fixture -Version 26.05 -Revision 99 -Force } 'unrecognized output'
-        Assert-True (Test-Path "$fixtureRoot/output/Fixture/26.05/rev-99/keep.txt") 'Unrelated output deleted.'
+        Assert-True (Test-Path "$fixtureRoot/apps/Fixture/26.05/output/rev-99/keep.txt") 'Unrelated output deleted.'
     }
     Test-Case 'Build locks prevent simultaneous writes to the same revision' {
-        $lockPath = "$fixtureRoot/output/Fixture/26.05/.rev-01.lock"
+        $lockPath = "$fixtureRoot/apps/Fixture/26.05/output/.rev-01.lock"
         $lock = [IO.File]::Open($lockPath,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
         try { Assert-Throws { & $builder -AppName Fixture -Version 26.05 -Force } 'Cannot acquire build lock' }
         finally { $lock.Dispose(); Remove-Item -LiteralPath $lockPath }

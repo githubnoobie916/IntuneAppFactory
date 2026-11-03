@@ -8,14 +8,15 @@ Per-app publishing defaults come from the revision's intune.upload JSON object.
 Explicit DeployMode, MinimumSupportedWindowsRelease, RestartBehavior and TimeoutSeconds override JSON.
 Requires Microsoft.Graph.Authentication for live upload. See ../UPLOADING.md.
 .PARAMETER AppName
-Select output/<AppName>/<Version>/rev-<Revision> relative to the factory directory.
+Select apps/<AppName>/<Version>/output/rev-<Revision> relative to the factory directory.
 Cannot be combined with RevisionPath. Settings come from the saved revision, not current source JSON.
 .PARAMETER Version
 Application version directory; AppVersion is an alias.
 .PARAMETER Revision
 Required with AppName and Version. Supply the exact 1-4 digit revision, including leading zeros (for example '01').
 .PARAMETER RevisionPath
-Explicit path to an existing generated revision, for custom locations.
+Explicit path to an existing generated revision, including builds in the old output directory.
+App selection does not fall back to the old output directory.
 .PARAMETER Preview
 Optional local review without authentication or tenant writes. Returns the plan as an object by default.
 .PARAMETER AsJson

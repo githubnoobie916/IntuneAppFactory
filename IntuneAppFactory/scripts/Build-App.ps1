@@ -3,6 +3,7 @@
 .SYNOPSIS
 Validate one application version or build its standalone PSADT 4.1.8 package.
 .DESCRIPTION
+Builds apps/<AppName>/<Version>/output/rev-<Revision> relative to the factory directory.
 After a successful build, prints commands to package, optionally preview, and upload the resolved revision.
 Commands use absolute script paths and are not executed. Replace <tenant-guid> before live upload.
 Upload and preview require PowerShell 7.2 or later. The build result remains a pipeline object.
@@ -59,9 +60,8 @@ $manifest = Import-PowerShellDataFile -LiteralPath $manifestPath
 if ($manifest.ModuleVersion -ne '4.1.8' -or $manifest.GUID -ne '8c3c366b-8606-4576-9f2d-4051144f7ca2') { throw 'Only the official PSADT 4.1.8 template is supported.' }
 . "$PSScriptRoot/Update-DeploymentTemplate.ps1"
 
-$outputRoot = Get-FactoryPath $projectRoot 'output'
-$versionOutput = Get-FactoryPath $outputRoot "$AppName/$Version"
-$target = Get-FactoryPath $versionOutput "rev-$($config.revision)"
+$target = Get-FactoryRevisionPath -ProjectRoot $projectRoot -AppName $AppName -Version $Version -Revision $config.revision
+$versionOutput = Split-Path $target -Parent
 $stage = Get-FactoryPath $versionOutput ('.stage-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
 $backup = Get-FactoryPath $versionOutput ('.backup-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
 Assert-FactoryNoLinks $versionOutput

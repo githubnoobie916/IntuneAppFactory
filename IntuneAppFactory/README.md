@@ -15,7 +15,7 @@ Run these commands from `IntuneAppFactory` in PowerShell on Windows. Build and p
 # Generate a new revision. Choose an unused revision to preserve earlier output.
 .\scripts\Build-App.ps1 -AppName 7zip -Version 26.05 -Revision '04'
 
-# Review/edit output\7zip\26.05\rev-04\Package\Invoke-AppDeployToolkit.ps1.
+# Review/edit apps\7zip\26.05\output\rev-04\Package\Invoke-AppDeployToolkit.ps1.
 
 # Package that exact folder separately, including your reviewed edits.
 .\scripts\New-IntuneWin.ps1 -AppName 7zip -Version 26.05 -Revision '04'
@@ -27,7 +27,7 @@ After each successful build, including a forced rebuild, Build prints ready-to-c
 
 For the separate upload stage, see [UPLOADING.md](UPLOADING.md). `Upload-IntuneWin.ps1` accepts the same app identifiers, reads a current revision's metadata and existing archive, supports offline `-Preview` / `-WhatIf`, and uses Microsoft Graph to create and upload a new Win32 app. Use `-Preview -AsJson` to display the full plan in one command. Plain `-Preview` and `-WhatIf` return an object. Preview is optional; live upload performs its own validation. Group assignment is optional and explicit.
 
-`Build-App.ps1 -Force` explicitly regenerates an existing recognized revision, replacing manual edits and any artifacts inside that revision. A failed generation preserves the previous revision. Without `-Force`, an existing revision is an error. `-Revision` overrides the JSON revision in the output snapshot without changing the source JSON.
+`Build-App.ps1 -Force` explicitly regenerates an existing recognized revision, replacing manual edits and any artifacts inside that revision, including `.intunewin` archives and upload receipts. Source configuration, installers, and other revisions remain unchanged. A failed generation preserves the previous revision. Without `-Force`, an existing revision is an error. `-Revision` overrides the JSON revision in the output snapshot without changing the source JSON.
 
 `New-IntuneWin.ps1 -Force` replaces an existing archive only after successful packaging and verification. Use it after changing a reviewed package. The package folder remains untouched.
 
@@ -40,8 +40,24 @@ Intune_App_Packaging/
     apps/<AppId>/
       icon.png                            # optional shared icon for all versions
       <Version>/
-        app.json
+        app.json                          # source configuration you edit
         installers/                       # approved MSI/EXE and sidecar files
+        output/rev-<Revision>/
+          app.json                        # effective configuration saved for this build
+          build.json                      # identity, commands, Intune metadata
+          Detection/Detect.ps1            # only for PowerShell detection
+          icon.png                        # only when explicitly configured
+          Package/
+            Invoke-AppDeployToolkit.exe
+            Invoke-AppDeployToolkit.ps1
+            Files/                        # referenced payloads and sidecar files
+            PSAppDeployToolkit/
+            PSAppDeployToolkit.Extensions/
+            Assets/, Config/, Strings/, SupportFiles/
+          IntuneWin/                      # created only by New-IntuneWin.ps1
+            Invoke-AppDeployToolkit.intunewin
+            Invoke-AppDeployToolkit.stdout.log
+            Invoke-AppDeployToolkit.stderr.log
     scripts/
       Build-App.ps1                       # generate a PSADT package
       AppConfig.ps1                       # build-time validation and path checks
@@ -56,24 +72,11 @@ Intune_App_Packaging/
       BlobClient.dependencies.json         # pinned NuGet packages and assembly hashes
     tests/
     tools/
-    output/<AppId>/<Version>/rev-<Revision>/
-      app.json                            # effective build inputs; not a runtime dependency
-      build.json                          # identity, commands, Intune metadata
-      icon.png                            # only when explicitly configured
-      Package/
-        Invoke-AppDeployToolkit.exe
-        Invoke-AppDeployToolkit.ps1
-        Files/                            # referenced install/uninstall/repair payloads + sidecars
-        PSAppDeployToolkit/
-        PSAppDeployToolkit.Extensions/
-        Assets/, Config/, Strings/, SupportFiles/
-      IntuneWin/                          # created only by New-IntuneWin.ps1
-        Invoke-AppDeployToolkit.intunewin
-        Invoke-AppDeployToolkit.stdout.log
-        Invoke-AppDeployToolkit.stderr.log
 ```
 
 Only `Package/` is deployment content. The JSON snapshots and Intune metadata stay outside it. Existing packages remain unchanged until explicitly rebuilt.
+
+Edit `apps/<AppName>/<Version>/app.json` before building. The generated revision's `app.json` saves the effective configuration, including any `-Revision` override, so later source edits do not change that revision's upload settings. Its `build.json` records build identity, toolkit version, deployment commands, icon location, and any detection-script hash. Packaging and upload use this metadata, and forced rebuilds check it before replacing a revision. Keep both generated JSON files; neither is a deployment-time dependency.
 
 ## Application JSON
 
@@ -183,7 +186,7 @@ The existing local tool is used without network access. To set it up on another 
 
 See [tools/README.md](tools/README.md) for the pinned tool, hash, signature verification, and update procedure. Neither generation nor packaging downloads it automatically.
 
-`New-IntuneWin.ps1` accepts either all three `-AppName`, `-Version`, and `-Revision` identifiers, or `-SourcePath`. Do not combine these selection modes. `-AppVersion` is an alias for `-Version`. App selection requires a matching generated `build.json` and packages `output/<AppName>/<Version>/rev-<Revision>/Package`. Revision is an exact string of 1-4 digits: `'01'` selects `rev-01`, while `'1'` selects `rev-1`. Packaging and uploading require an explicit revision in app mode; they never choose the latest build or read a revision default from current source JSON.
+`New-IntuneWin.ps1` accepts either all three `-AppName`, `-Version`, and `-Revision` identifiers, or `-SourcePath`. Do not combine these selection modes. `-AppVersion` is an alias for `-Version`. App selection requires a matching generated `build.json` and packages `apps/<AppName>/<Version>/output/rev-<Revision>/Package`. Revision is an exact string of 1-4 digits: `'01'` selects `rev-01`, while `'1'` selects `rev-1`. Packaging and uploading require an explicit revision in app mode; they never choose the latest build or read a revision default from current source JSON.
 
 Both packaging modes support `-OutputPath`, `-SetupFile`, `-ToolPath`, `-TimeoutSeconds`, and `-Force`. The default output is an `IntuneWin/` folder beside the source. Existing path-based commands remain supported, including standalone PSADT v3/v4 folders without factory metadata:
 
@@ -195,13 +198,23 @@ If both v3 and v4 launchers exist, specify `-SetupFile`. Output and the packagin
 
 ## Migration and maintenance
 
+New builds are stored under `apps/<AppName>/<Version>/output/rev-<Revision>`. Existing builds under `output/<AppName>/<Version>/rev-<Revision>` are not moved, deleted, or automatically selected. App-name commands use only the new layout. Both output locations are ignored by Git.
+
+To keep using an existing build at the old location, run from `IntuneAppFactory` and specify its path. Packaging's `-SourcePath` points to `Package`; upload's `-RevisionPath` points to the revision folder containing both JSON files. Preview requires the revision's upload settings or equivalent command-line overrides as described in [UPLOADING.md](UPLOADING.md).
+
+```powershell
+# Package only if this revision does not already have an archive.
+.\scripts\New-IntuneWin.ps1 -SourcePath '.\output\7zip\26.05\rev-05\Package'
+.\scripts\Upload-IntuneWin.ps1 -RevisionPath '.\output\7zip\26.05\rev-05' -DeployMode Silent -MinimumSupportedWindowsRelease Windows11_23H2 -RestartBehavior basedOnReturnCode -Preview -AsJson
+```
+
 The former customized `templates/PSADT-4.1.8` tree and `AppDeployment.ps1` runtime are retired. `templateValues` is replaced by explicit JSON fields, including `psadt.scriptAuthor` and the other native metadata fields. Process strings must be expanded to objects with both name and description. Add all required settings to older JSON before rebuilding; use the complete example as the migration reference. Remove `psadt.deployMode` from older JSON and supply `-DeployMode` on the launcher command line instead. Existing generated packages retain their previous behavior until rebuilt.
 
 `Build-App.ps1 -CreateIntuneWin` and `-IntuneWinToolPath` no longer exist. Run `New-IntuneWin.ps1` separately. Old generated revisions still contain their own runtime helpers and remain unchanged.
 
 Generation currently targets the provided 4.1.8 template. It checks expected edit locations and parses the generated script before publication. If the upstream template changes, generation fails clearly when those locations no longer match; review the renderer and tests before adopting another release. Never modify synced files under `sources/` as part of a build.
 
-Builds use staging and a revision lock, preserving previous output if generation or publication fails. Packaging has its own lock and verified temporary output. An interrupted process can leave staging, backup, or lock files; confirm no build is active before manual recovery. Keep backups until recovery is complete.
+Builds use staging, backup directories, and a revision lock inside `apps/<AppName>/<Version>/output`, preserving previous output if generation or publication fails. Packaging has its own lock and verified temporary output. An interrupted process can leave staging, backup, or lock files; confirm no build is active before manual recovery. Keep backups until recovery is complete.
 
 ## Verification
 

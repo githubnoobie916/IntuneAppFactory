@@ -166,7 +166,7 @@ try {
     }
     Test-Case 'App selection packages the same revision as an explicit path from another directory' {
         $script:factory = Join-Path $sandbox "Factory's files"
-        $script:revisionPath = Join-Path $factory 'output/Fixture/26.05/rev-01'
+        $script:revisionPath = Join-Path $factory 'apps/Fixture/26.05/output/rev-01'
         New-Item -ItemType Directory -Path $revisionPath -Force | Out-Null
         Copy-Item -LiteralPath "$projectRoot/scripts" -Destination $factory -Recurse
         Copy-Item -LiteralPath $source -Destination "$revisionPath/Package" -Recurse
@@ -214,6 +214,17 @@ function Invoke-FactoryIntuneWinProcess {
         Assert-Throws { & $packager -AppName Fixture -Version 26.05 -Revision '01' -SourcePath $source } 'parameter set'
         Assert-Throws { & $packager -AppName Fixture -Version 26.05 -Revision '' } 'empty|Revision'
     }
+    Test-Case 'Old output requires explicit source paths and is never selected by app name' {
+        $oldRevision = Join-Path $factory 'output/Fixture/26.05/rev-03'
+        New-Item -ItemType Directory -Path $oldRevision -Force | Out-Null
+        Copy-Item -LiteralPath $source -Destination "$oldRevision/Package" -Recurse
+        $oldIdentity = $identity.Clone(); $oldIdentity.revision = '03'
+        $oldIdentity | ConvertTo-Json | Set-Content "$oldRevision/build.json"
+        $packageProbe = @{}
+        $explicit = & $packager -SourcePath "$oldRevision/Package"
+        Assert-True ($explicit.IntuneWinPath -eq (Join-Path $oldRevision 'IntuneWin/Invoke-AppDeployToolkit.intunewin')) 'Explicit old-path packaging failed.'
+        Assert-Throws { & $packager -AppName Fixture -Version 26.05 -Revision '03' } 'Revision directory not found'
+    }
     Test-Case 'Revision resolution rejects missing, unsafe, mismatched and redirected output' {
         $selection = @{ProjectRoot=$factory;AppName='Fixture';Version='26.05';Revision='01'}
         Assert-True ((Resolve-FactoryRevision @selection) -eq [IO.Path]::GetFullPath($revisionPath)) 'Resolver selected the wrong revision.'
@@ -246,11 +257,11 @@ function Invoke-FactoryIntuneWinProcess {
             Assert-Throws { Resolve-FactoryRevision @selection } 'Invalid.*build.json'
             Remove-Item -LiteralPath $metadata
             Assert-Throws { Resolve-FactoryRevision @selection } 'build.json'
-            New-Item -ItemType Junction -Path "$factory/output/Fixture/26.05/rev-02" -Target $revisionPath | Out-Null
+            New-Item -ItemType Junction -Path "$factory/apps/Fixture/26.05/output/rev-02" -Target $revisionPath | Out-Null
             try {
                 $selectionArgs = $selection.Clone(); $selectionArgs.Revision = '02'
                 Assert-Throws { Resolve-FactoryRevision @selectionArgs } 'Reparse points'
-            } finally { [IO.Directory]::Delete("$factory/output/Fixture/26.05/rev-02") }
+            } finally { [IO.Directory]::Delete("$factory/apps/Fixture/26.05/output/rev-02") }
         } finally { Set-Content $metadata $saved }
     }
     Test-Case 'Nonzero exit, missing, empty and corrupt output never report success' {

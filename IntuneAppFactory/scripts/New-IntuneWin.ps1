@@ -4,9 +4,10 @@
 Package an existing PSADT v3 or v4 source directory without executing its deployment.
 .DESCRIPTION
 Select a generated build with AppName, Version and Revision, or a standalone folder with SourcePath.
-App selection resolves output relative to the factory directory, regardless of the working directory.
+App selection resolves apps/<AppName>/<Version>/output/rev-<Revision>/Package relative to the factory directory.
+Use SourcePath for existing builds in the old output directory; app selection does not fall back to it.
 .PARAMETER AppName
-Application directory name under the factory output directory. Cannot be combined with SourcePath.
+Application directory name under the factory apps directory. Cannot be combined with SourcePath.
 .PARAMETER Version
 Application version directory; AppVersion is an alias.
 .PARAMETER Revision

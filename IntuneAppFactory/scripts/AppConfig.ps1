@@ -50,7 +50,7 @@ function Assert-FactoryNoLinks([string]$Path, [switch]$Recurse) {
     }
 }
 
-function Resolve-FactoryRevision {
+function Get-FactoryRevisionPath {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ProjectRoot,
@@ -61,7 +61,18 @@ function Resolve-FactoryRevision {
     Assert-FactorySegment $AppName 'AppName'
     Assert-FactorySegment $Version 'Version'
     if ($Revision -notmatch '\A[0-9]{1,4}\z') { throw 'Revision must contain 1-4 digits; preserve leading zeros when selecting a build.' }
-    $path = Get-FactoryPath $ProjectRoot "output/$AppName/$Version/rev-$Revision"
+    return Get-FactoryPath $ProjectRoot "apps/$AppName/$Version/output/rev-$Revision"
+}
+
+function Resolve-FactoryRevision {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [Parameter(Mandatory)][string]$AppName,
+        [Parameter(Mandatory)][string]$Version,
+        [Parameter(Mandatory)][string]$Revision
+    )
+    $path = Get-FactoryRevisionPath -ProjectRoot $ProjectRoot -AppName $AppName -Version $Version -Revision $Revision
     Assert-FactoryNoLinks $path
     if (-not (Test-Path -LiteralPath $path -PathType Container)) { throw "Revision directory not found: '$path'. Build the selected revision first." }
     $metadataPath = Get-FactoryPath $path 'build.json'

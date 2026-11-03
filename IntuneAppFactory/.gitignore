@@ -1,4 +1,6 @@
 # Generated output, test sandboxes, and the downloaded release archive.
+/apps/*/*/output/
+# Keep existing builds at the old location ignored.
 /output/
 # Downloaded Microsoft Content Prep Tool, license, and local verification receipt.
 /tools/*

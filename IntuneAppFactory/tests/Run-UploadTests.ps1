@@ -83,7 +83,7 @@ $planArgs = @{ RevisionPath=$sandbox; DeployMode='Silent'; MinimumSupportedWindo
 try {
     Test-Case 'App selection and JSON preview preserve the saved plan and all overrides offline' {
         $factory = Join-Path $sandbox "Factory's files"
-        $revision = Join-Path $factory 'output/7zip/26.05/rev-01'
+        $revision = Join-Path $factory 'apps/7zip/26.05/output/rev-01'
         New-Item -ItemType Directory -Path $revision -Force | Out-Null
         Copy-Item -LiteralPath "$projectRoot/scripts" -Destination $factory -Recurse
         Copy-Item -LiteralPath "$sandbox/app.json","$sandbox/build.json","$sandbox/IntuneWin" -Destination $revision -Recurse
@@ -108,7 +108,7 @@ try {
             Assert-True ($alias.RevisionPath -eq $byPath.RevisionPath) 'AppVersion alias failed.'
             $defaultArchive = & $uploader @app -DeployMode Silent -MinimumSupportedWindowsRelease Windows11_23H2 -RestartBehavior basedOnReturnCode -Preview
             Assert-True ($defaultArchive.IntuneWinPath -eq (Join-Path $revision 'IntuneWin/Invoke-AppDeployToolkit.intunewin')) 'Default archive not selected.'
-            # There is no apps/ source config in this copied factory: only the saved revision is used.
+            # There is no source app.json in this copied factory: only the saved revision is used.
             Assert-Throws { & $uploader @app -RevisionPath $revision -Preview } 'parameter set'
             Assert-Throws { & $uploader -RevisionPath "$sandbox/missing" -AsJson } 'AsJson.*Preview'
             Assert-Throws { & $uploader @app -AsJson -WhatIf } 'AsJson.*Preview'
@@ -122,6 +122,18 @@ try {
             $changed | ConvertTo-Json -Depth 20 | Set-Content "$revision/build.json"
             Assert-Throws { & $uploader @app @options -Preview } 'metadata|match'
         } finally { Pop-Location }
+    }
+    Test-Case 'Old output remains previewable by explicit revision path without app-name fallback' {
+        $oldFactory = Join-Path $sandbox 'Old factory'
+        $oldRevision = Join-Path $oldFactory 'output/7zip/26.05/rev-01'
+        New-Item -ItemType Directory -Path $oldRevision -Force | Out-Null
+        Copy-Item -LiteralPath "$projectRoot/scripts" -Destination $oldFactory -Recurse
+        Copy-Item -LiteralPath "$sandbox/app.json","$sandbox/build.json","$sandbox/IntuneWin" -Destination $oldRevision -Recurse
+        $oldUploader = "$oldFactory/scripts/Upload-IntuneWin.ps1"
+        $options = @{DeployMode='Silent';MinimumSupportedWindowsRelease='Windows11_23H2';RestartBehavior='basedOnReturnCode';Preview=$true}
+        $plan = & $oldUploader -RevisionPath $oldRevision @options
+        Assert-True ($plan.IntuneWinPath -eq (Join-Path $oldRevision 'IntuneWin/Invoke-AppDeployToolkit.intunewin')) 'Explicit old-path upload preview failed.'
+        Assert-Throws { & $oldUploader -AppName 7zip -Version 26.05 -Revision '01' @options } 'Revision directory not found'
     }
     Test-Case 'PowerShell detection preserves bytes, uses the revision snapshot and rejects changed content' {
         $originalConfig = Get-Content "$sandbox/app.json" -Raw
