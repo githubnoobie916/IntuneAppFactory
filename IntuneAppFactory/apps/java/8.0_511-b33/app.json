@@ -1,0 +1,105 @@
+{
+  "name": "Java 8 Runtime",
+  "publisher": "Java",
+  "version": "8.0_511-b33",
+  "architecture": "x64",
+  "language": "EN",
+  "revision": "01",
+  "install": [
+    { "type": "EXE", "path": "jre-8u511-windows-x64.exe", "arguments": "/s REMOVEOLDERJRES=1" }
+  ],
+  "uninstall": [
+    { "type": "EXE", "path": "jre-8u511-windows-x64.exe", "arguments": "/s" }
+  ],
+  "repair": [],
+  "additionalFiles": [],
+  "psadt": {
+    "processesToClose": [],
+    "allowDefer": true,
+    "deferTimes": 3,
+    "checkDiskSpace": true,
+    "persistPrompt": true,
+    "suppressRebootPassThru": false,
+    "terminalServerMode": false,
+    "disableLogging": false,
+    "scriptAuthor": "IntuneAppFactory",
+    "scriptVersion": "1.0.0",
+    "scriptDate": "2026-11-02",
+    "successExitCodes": [0],
+    "rebootExitCodes": [1641, 3010],
+    "installName": "Java8 Runtime",
+    "installTitle": "Java8 Runtime",
+    "completionPrompt": {
+      "message": "Java8 Runtime installation completed.",
+      "buttonRightText": "OK",
+      "noWait": true
+    }
+  },
+  "intune": {
+    "displayName": "Java8 Runtime",
+    "description": "Java8 Runtime",
+    "informationUrl": "https://www.java.com/en/download/manual.jsp",
+    "installContext": "system",
+    "icon": "icon.png",
+    "detection": {
+      "type": "powershell",
+      "scriptPath": "detection/detectionscript.ps1",
+      "runAs32Bit": false,
+      "enforceSignatureCheck": false
+    },
+    "upload": {
+      "deployMode": "Auto",
+      "minimumSupportedWindowsRelease": "1809",
+      "restartBehavior": "suppress",
+      "returnCodes": [
+        {
+          "returnCode": 0,
+          "type": "success"
+        },
+        {
+          "returnCode": 1707,
+          "type": "success"
+        },
+        {
+          "returnCode": 3010,
+          "type": "softReboot"
+        },
+        {
+          "returnCode": 1641,
+          "type": "hardReboot"
+        },
+        {
+          "returnCode": 1618,
+          "type": "retry"
+        },
+        {
+          "returnCode": 60001,
+          "type": "failed"
+        },
+        {
+          "returnCode": 60008,
+          "type": "failed"
+        },
+        {
+          "returnCode": 60010,
+          "type": "failed"
+        },
+        {
+          "returnCode": 60011,
+          "type": "failed"
+        },
+        {
+          "returnCode": 1602,
+          "type": "retry"
+        }
+      ],
+      "transport": {
+        "maxRetries": 10,
+        "blockSizeBytes": 4194304,
+        "sasRenewalThresholdMinutes": 5,
+        "timeoutSeconds": 900
+      }
+    }
+  },
+  "notes": "Adapted from the user-provided example; version, installer switches and registry detection need vendor/device validation. Windows11_24H2 is an illustrative fleet requirement, not equivalent to the original v10_1607 setting. No installer has been downloaded. The icon path is relative to apps/<AppId>/: for AppId notepadplusplus, supply apps/notepadplusplus/icon.png before building. Each version can use the same icon.png. Set intune.icon to an empty string to omit the icon. No Notepad++ icon file is included."
+}
