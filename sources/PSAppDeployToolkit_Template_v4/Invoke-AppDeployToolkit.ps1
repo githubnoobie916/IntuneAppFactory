@@ -143,6 +143,26 @@ function Install-ADTDeployment
 
     ## <Perform Pre-Installation tasks here>
 
+    ## <BEGIN - Uninstall Current version before installing new version>
+    $versionMismatch = Get-ADTApplication -Name $adtSession.AppName -NameMatch Exact -FilterScript 
+    {
+        $_.DisplayVersion -ne $adtSession.AppVersion
+    }
+
+    $versionMismatchComponents = Get-ADTApplication -Name $adtSession.AppName
+
+    if ($versionMismatch)
+    {
+        Write-ADTLogEntry -Message "Removing Application: $($versionMismatch.DisplayName) Version: $($versionMismatch.DisplayVersion) prior to installing version $($adtSession.AppVersion)"
+
+        foreach ($component in $versionMismatchComponents)
+        {
+            Write-Host "Uninstalling $($component.DisplayName) prior to installation"
+
+            Uninstall-ADTApplication -Name $component.DisplayName -NameMatch Exact -WaitForChildProcesses
+        }
+    }
+    ## <END - Uninstall Current version before installing new version>
 
     ##================================================
     ## MARK: Install
