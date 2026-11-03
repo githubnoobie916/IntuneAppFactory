@@ -50,6 +50,35 @@ function Assert-FactoryNoLinks([string]$Path, [switch]$Recurse) {
     }
 }
 
+function Resolve-FactoryRevision {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [Parameter(Mandatory)][string]$AppName,
+        [Parameter(Mandatory)][string]$Version,
+        [Parameter(Mandatory)][string]$Revision
+    )
+    Assert-FactorySegment $AppName 'AppName'
+    Assert-FactorySegment $Version 'Version'
+    if ($Revision -notmatch '\A[0-9]{1,4}\z') { throw 'Revision must contain 1-4 digits; preserve leading zeros when selecting a build.' }
+    $path = Get-FactoryPath $ProjectRoot "output/$AppName/$Version/rev-$Revision"
+    Assert-FactoryNoLinks $path
+    if (-not (Test-Path -LiteralPath $path -PathType Container)) { throw "Revision directory not found: '$path'. Build the selected revision first." }
+    $metadataPath = Get-FactoryPath $path 'build.json'
+    Assert-FactoryNoLinks $metadataPath
+    if (-not (Test-Path -LiteralPath $metadataPath -PathType Leaf)) { throw "Build metadata not found: '$metadataPath'. Select a generated factory revision." }
+    try { $build = Get-Content -LiteralPath $metadataPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop }
+    catch { throw "Invalid build.json at '$metadataPath': $($_.Exception.Message)" }
+    if ($build -isnot [pscustomobject] -or $build.factory -isnot [string] -or $build.factory -cne 'IntuneAppFactory') { throw "Build metadata at '$metadataPath' must identify IntuneAppFactory." }
+    $expected = @{appName=$AppName;version=$Version;revision=$Revision}
+    foreach ($field in @('appName','version','revision')) {
+        if ($build.$field -isnot [string] -or $build.$field -cne $expected[$field]) {
+            throw "Build metadata '$field' does not match selected value '$($expected[$field])' at '$metadataPath'."
+        }
+    }
+    return $path
+}
+
 function Assert-FactoryObject($Value, [string[]]$Keys, [string]$Label, [string[]]$Required = $Keys) {
     if ($Value -isnot [pscustomobject]) { throw "$Label must be a JSON object." }
     foreach ($key in $Value.PSObject.Properties.Name) {

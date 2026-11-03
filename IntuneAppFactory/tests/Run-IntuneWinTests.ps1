@@ -136,7 +136,7 @@ try {
     # not deployable packages; the real Microsoft tool is exercised separately end-to-end.
     function Get-FactoryIntuneWinTool { param($ToolPath) return (Join-Path $sandbox 'verified-tool.exe') }
     function Write-TestIntuneWin([string]$Path, [string]$SetupFile) {
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
         $archive = [IO.Compression.ZipFile]::Open($Path, [IO.Compression.ZipArchiveMode]::Create)
         try {
             foreach ($item in @(
@@ -163,6 +163,95 @@ try {
             'launchfailure' { throw 'Simulated process start failure' }
             default { Write-TestIntuneWin $path $SetupFile; return 0 }
         }
+    }
+    Test-Case 'App selection packages the same revision as an explicit path from another directory' {
+        $script:factory = Join-Path $sandbox "Factory's files"
+        $script:revisionPath = Join-Path $factory 'output/Fixture/26.05/rev-01'
+        New-Item -ItemType Directory -Path $revisionPath -Force | Out-Null
+        Copy-Item -LiteralPath "$projectRoot/scripts" -Destination $factory -Recurse
+        Copy-Item -LiteralPath $source -Destination "$revisionPath/Package" -Recurse
+        $script:identity = @{factory='IntuneAppFactory';appName='Fixture';version='26.05';revision='01'}
+        $identity | ConvertTo-Json | Set-Content "$revisionPath/build.json"
+        # Keep real packaging validation; stub only tool verification/execution in the copied factory.
+        Add-Content -LiteralPath "$factory/scripts/IntuneWin.ps1" -Value @'
+function Get-FactoryIntuneWinTool {
+    param($ToolPath)
+    $packageProbe.ToolPath = $ToolPath
+    return 'verified-test-tool.exe'
+}
+function Invoke-FactoryIntuneWinProcess {
+    param($ToolPath,$SourcePath,$SetupFile,$OutputPath,$TimeoutSeconds)
+    $packageProbe.SourcePath = $SourcePath
+    $packageProbe.TimeoutSeconds = $TimeoutSeconds
+    Set-Content -LiteralPath (Join-Path $OutputPath 'stdout.log') -Value 'Fixture diagnostic'
+    Set-Content -LiteralPath (Join-Path $OutputPath 'stderr.log') -Value ''
+    Write-TestIntuneWin (Join-Path $OutputPath ([IO.Path]::ChangeExtension($SetupFile, '.intunewin'))) $SetupFile
+    return 0
+}
+'@
+        $packageProbe = @{}
+        $script:packager = "$factory/scripts/New-IntuneWin.ps1"
+        Push-Location $sandbox
+        try {
+            $selected = & $packager -AppName Fixture -AppVersion 26.05 -Revision '01'
+            $explicit = & $packager -SourcePath "$revisionPath/Package" -Force
+            Assert-True ($selected.IntuneWinPath -eq $explicit.IntuneWinPath) 'Selection modes resolved different archives.'
+            Assert-True ($selected.Status -eq 'Packaged' -and $selected.IntuneWinPath -match 'rev-01') 'Revision or result changed.'
+            $custom = & $packager -AppName Fixture -Version 26.05 -Revision '01' -OutputPath "$sandbox/custom output" -ToolPath 'custom-tool.exe' -SetupFile Invoke-AppDeployToolkit.exe -TimeoutSeconds 27 -Force
+            Assert-True ($custom.IntuneWinPath -eq (Join-Path $sandbox 'custom output/Invoke-AppDeployToolkit.intunewin')) 'Output override ignored.'
+            Assert-True ($packageProbe.ToolPath -eq 'custom-tool.exe' -and $packageProbe.TimeoutSeconds -eq 27) 'Packaging overrides were not forwarded.'
+            $legacy = & $packager -SourcePath "$sandbox/v3" -OutputPath "$sandbox/legacy output"
+            Assert-True ($legacy.SetupFile -eq 'Deploy-Application.exe') 'Standalone v3 packaging changed.'
+        } finally { Pop-Location }
+    }
+    Test-Case 'App selection requires complete identifiers and rejects mixed parameter sets' {
+        $sets = (Get-Command $packager).ParameterSets
+        $appSet = @($sets | Where-Object { 'AppName' -in $_.Parameters.Name })
+        Assert-True ($appSet.Count -eq 1) 'Expected one app parameter set.'
+        foreach ($name in @('AppName','Version','Revision')) {
+            Assert-True (@($appSet[0].Parameters | Where-Object { $_.Name -eq $name -and $_.IsMandatory }).Count -eq 1) "$name must be mandatory."
+        }
+        Assert-Throws { & $packager -AppName Fixture -Version 26.05 -Revision '01' -SourcePath $source } 'parameter set'
+        Assert-Throws { & $packager -AppName Fixture -Version 26.05 -Revision '' } 'empty|Revision'
+    }
+    Test-Case 'Revision resolution rejects missing, unsafe, mismatched and redirected output' {
+        $selection = @{ProjectRoot=$factory;AppName='Fixture';Version='26.05';Revision='01'}
+        Assert-True ((Resolve-FactoryRevision @selection) -eq [IO.Path]::GetFullPath($revisionPath)) 'Resolver selected the wrong revision.'
+        foreach ($bad in @('../outside','CON','bad/name')) {
+            $selectionArgs = $selection.Clone(); $selectionArgs.AppName = $bad
+            Assert-Throws { Resolve-FactoryRevision @selectionArgs } 'safe path segment'
+        }
+        $selectionArgs = $selection.Clone(); $selectionArgs.Version = '../outside'
+        Assert-Throws { Resolve-FactoryRevision @selectionArgs } 'safe path segment'
+        foreach ($bad in @('rev-01','12345','../01',"01`n")) {
+            $selectionArgs = $selection.Clone(); $selectionArgs.Revision = $bad
+            Assert-Throws { Resolve-FactoryRevision @selectionArgs } 'Revision'
+        }
+        $selectionArgs = $selection.Clone(); $selectionArgs.Revision = '1'
+        Assert-Throws { Resolve-FactoryRevision @selectionArgs } 'Revision directory not found'
+        $metadata = "$revisionPath/build.json"
+        $saved = Get-Content $metadata -Raw
+        try {
+            foreach ($field in @('factory','appName','version','revision')) {
+                $changed = $identity.Clone(); $changed[$field] = 'wrong'
+                $changed | ConvertTo-Json | Set-Content $metadata
+                Assert-Throws { Resolve-FactoryRevision @selection } 'metadata|match|IntuneAppFactory'
+            }
+            foreach ($field in @('factory','appName','version','revision')) {
+                $changed = $identity.Clone(); $changed[$field] = @($identity[$field])
+                $changed | ConvertTo-Json | Set-Content $metadata
+                Assert-Throws { Resolve-FactoryRevision @selection } 'metadata|match|IntuneAppFactory'
+            }
+            Set-Content $metadata '{bad json'
+            Assert-Throws { Resolve-FactoryRevision @selection } 'Invalid.*build.json'
+            Remove-Item -LiteralPath $metadata
+            Assert-Throws { Resolve-FactoryRevision @selection } 'build.json'
+            New-Item -ItemType Junction -Path "$factory/output/Fixture/26.05/rev-02" -Target $revisionPath | Out-Null
+            try {
+                $selectionArgs = $selection.Clone(); $selectionArgs.Revision = '02'
+                Assert-Throws { Resolve-FactoryRevision @selectionArgs } 'Reparse points'
+            } finally { [IO.Directory]::Delete("$factory/output/Fixture/26.05/rev-02") }
+        } finally { Set-Content $metadata $saved }
     }
     Test-Case 'Nonzero exit, missing, empty and corrupt output never report success' {
         foreach ($mode in @('nonzero','missing','empty','corrupt','wrongsetup','launchfailure')) {

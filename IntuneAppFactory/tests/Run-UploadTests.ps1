@@ -81,6 +81,48 @@ try {
 } finally { $archive.Dispose() }
 $planArgs = @{ RevisionPath=$sandbox; DeployMode='Silent'; MinimumSupportedWindowsRelease='Windows11_23H2'; RestartBehavior='basedOnReturnCode' }
 try {
+    Test-Case 'App selection and JSON preview preserve the saved plan and all overrides offline' {
+        $factory = Join-Path $sandbox "Factory's files"
+        $revision = Join-Path $factory 'output/7zip/26.05/rev-01'
+        New-Item -ItemType Directory -Path $revision -Force | Out-Null
+        Copy-Item -LiteralPath "$projectRoot/scripts" -Destination $factory -Recurse
+        Copy-Item -LiteralPath "$sandbox/app.json","$sandbox/build.json","$sandbox/IntuneWin" -Destination $revision -Recurse
+        $uploader = "$factory/scripts/Upload-IntuneWin.ps1"
+        $options = @{DeployMode='Silent';MinimumSupportedWindowsRelease='Windows11_23H2';RestartBehavior='basedOnReturnCode';TimeoutSeconds=27;IntuneWinPath=$archivePath;GroupId='11111111-1111-1111-1111-111111111111';AssignmentIntent='available'}
+        $app = @{AppName='7zip';Version='26.05';Revision='01'}
+        function Connect-MgGraph { throw 'Unexpected authentication' }
+        function Invoke-MgGraphRequest { throw 'Unexpected network operation' }
+        Push-Location $sandbox
+        try {
+            $byPath = & $uploader -RevisionPath $revision @options -Preview
+            $byApp = & $uploader @app @options -Preview
+            Assert-True ($byApp -is [pscustomobject]) 'Plain preview must return an object.'
+            Assert-True (($byApp | ConvertTo-Json -Depth 20) -ceq ($byPath | ConvertTo-Json -Depth 20)) 'Selection changed the upload plan.'
+            $json = & $uploader @app @options -Preview -AsJson
+            Assert-True ($json -is [string]) 'JSON preview must return a single string.'
+            $parsed = $json | ConvertFrom-Json
+            Assert-True (($parsed | ConvertTo-Json -Depth 20) -ceq ($byPath | ConvertTo-Json -Depth 20)) 'JSON preview lost plan fields.'
+            $whatif = & $uploader @app @options -WhatIf
+            Assert-True ($whatif.SHA256 -eq $byPath.SHA256) 'WhatIf changed the plan.'
+            $alias = & $uploader -AppName 7zip -AppVersion 26.05 -Revision '01' @options -Preview
+            Assert-True ($alias.RevisionPath -eq $byPath.RevisionPath) 'AppVersion alias failed.'
+            $defaultArchive = & $uploader @app -DeployMode Silent -MinimumSupportedWindowsRelease Windows11_23H2 -RestartBehavior basedOnReturnCode -Preview
+            Assert-True ($defaultArchive.IntuneWinPath -eq (Join-Path $revision 'IntuneWin/Invoke-AppDeployToolkit.intunewin')) 'Default archive not selected.'
+            # There is no apps/ source config in this copied factory: only the saved revision is used.
+            Assert-Throws { & $uploader @app -RevisionPath $revision -Preview } 'parameter set'
+            Assert-Throws { & $uploader -RevisionPath "$sandbox/missing" -AsJson } 'AsJson.*Preview'
+            Assert-Throws { & $uploader @app -AsJson -WhatIf } 'AsJson.*Preview'
+            $sets = (Get-Command $uploader).ParameterSets
+            $appSet = @($sets | Where-Object { 'AppName' -in $_.Parameters.Name })
+            foreach ($name in @('AppName','Version','Revision')) {
+                Assert-True (@($appSet[0].Parameters | Where-Object { $_.Name -eq $name -and $_.IsMandatory }).Count -eq 1) "$name must be mandatory."
+            }
+            $changed = Get-Content "$revision/build.json" -Raw | ConvertFrom-Json
+            $changed.appName = 'wrong'
+            $changed | ConvertTo-Json -Depth 20 | Set-Content "$revision/build.json"
+            Assert-Throws { & $uploader @app @options -Preview } 'metadata|match'
+        } finally { Pop-Location }
+    }
     Test-Case 'PowerShell detection preserves bytes, uses the revision snapshot and rejects changed content' {
         $originalConfig = Get-Content "$sandbox/app.json" -Raw
         $originalBuild = Get-Content "$sandbox/build.json" -Raw
