@@ -26,6 +26,33 @@ function Get-TreeSnapshot([string]$Root) {
         $_.FullName.Substring($Root.Length) + ':' + (Get-FileHash -LiteralPath $_.FullName).Hash
     }) -join "`n")
 }
+function Assert-BuildNextCommands($Messages, [string]$ExpectedRevision, [string]$FactoryRoot) {
+    $lines = @($Messages | ForEach-Object { $_.MessageData.ToString() })
+    $commands = @($lines | Where-Object { $_ -like '& *' })
+    Assert-True ($commands.Count -eq 3) 'Build must print packaging, preview and upload commands.'
+    $expectedScripts = @('New-IntuneWin.ps1','Upload-IntuneWin.ps1','Upload-IntuneWin.ps1')
+    for ($index = 0; $index -lt $commands.Count; $index++) {
+        $tokens = $null; $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseInput($commands[$index], [ref]$tokens, [ref]$errors)
+        Assert-True (-not $errors) 'A printed command has invalid PowerShell quoting.'
+        $calls = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.CommandAst] }, $true))
+        Assert-True ($calls.Count -eq 1) 'Printed command contains unexpected additional commands.'
+        Assert-True ($calls[0].GetCommandName() -eq (Join-Path $FactoryRoot "scripts/$($expectedScripts[$index])")) 'Printed script path is not absolute or was quoted incorrectly.'
+        $arguments = @{}
+        $elements = $calls[0].CommandElements
+        for ($i = 1; $i -lt $elements.Count; $i++) {
+            $name = $elements[$i].ParameterName
+            if ($i + 1 -lt $elements.Count -and $elements[$i + 1] -is [Management.Automation.Language.StringConstantExpressionAst]) {
+                $arguments[$name] = $elements[++$i].Value
+            } else { $arguments[$name] = $true }
+        }
+        Assert-True ($arguments.AppName -ceq 'Fixture' -and $arguments.Version -ceq '26.05' -and $arguments.Revision -ceq $ExpectedRevision) 'Printed command does not select the built revision.'
+        Assert-True (-not $arguments.ContainsKey('Force') -and -not $arguments.ContainsKey('GroupId')) 'Printed commands include unrequested mutations.'
+        if ($index -eq 1) { Assert-True ($arguments.Preview -and $arguments.AsJson) 'Preview must use JSON output.' }
+        if ($index -eq 2) { Assert-True ($arguments.TenantId -ceq '<tenant-guid>' -and -not $arguments.Preview) 'Live upload must include a tenant placeholder.' }
+    }
+    Assert-True (($lines -join "`n") -match 'Review.*deployment' -and ($lines -join "`n") -match 'PowerShell 7.2' -and ($lines -join "`n") -match 'Optional') 'Next-step guidance is incomplete.'
+}
 $sandboxParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $sandbox = Get-FactoryPath $sandboxParent ('IntuneAppFactory.Tests-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $sandbox | Out-Null
@@ -220,7 +247,7 @@ try {
         }
     }
     Test-Case 'Builder uses original template and creates a standalone package without packaging tools' {
-        $script:fixtureRoot = Join-Path $sandbox 'Factory'
+        $script:fixtureRoot = Join-Path $sandbox "F's dir"
         New-Item -ItemType Directory -Path "$fixtureRoot/apps/Fixture/26.05/installers","$sandbox/sources" -Force | Out-Null
         Copy-Item -LiteralPath "$projectRoot/scripts" -Destination $fixtureRoot -Recurse
         $script:pristineRoot = Join-Path (Split-Path $projectRoot -Parent) 'sources/PSAppDeployToolkit_Template_v4'
@@ -234,7 +261,7 @@ try {
         foreach ($name in @('7z2605-x64.msi','setup.exe','repair.exe')) { Set-Content "$fixtureRoot/apps/Fixture/26.05/installers/$name" 'Inert test payload; never execute.' }
         $script:builder = "$fixtureRoot/scripts/Build-App.ps1"
         Push-Location $sandbox
-        try { $script:built = & $builder -AppName Fixture -Version 26.05 }
+        try { $script:built = & $builder -AppName Fixture -Version 26.05 -InformationVariable buildMessages }
         finally { Pop-Location }
         Assert-True (Test-Path "$($built.PackagePath)/Files/repair.exe") 'Repair-only payload was not copied.'
         Assert-True (-not (Test-Path "$($built.PackagePath)/app.json") -and -not (Test-Path "$($built.PackagePath)/SupportFiles/Factory")) 'Runtime factory files were shipped.'
@@ -245,6 +272,8 @@ try {
             if ($relative -eq 'Invoke-AppDeployToolkit.ps1') { continue }
             Assert-True ((Get-FileHash $file.FullName).Hash -eq (Get-FileHash (Join-Path $built.PackagePath $relative)).Hash) "Template file changed: $relative"
         }
+        Assert-True ($built -is [pscustomobject] -and $built.Status -eq 'Built') 'Command text leaked onto the success pipeline.'
+        Assert-BuildNextCommands $buildMessages '01' $fixtureRoot
     }
     Test-Case 'Builder snapshots detection script bytes without executing them or including them in Package' {
         $appConfigPath = "$fixtureRoot/apps/Fixture/26.05/app.json"
@@ -453,8 +482,9 @@ try {
         }
     }
     Test-Case 'Validation alone writes no package and generation has no packaging parameters' {
-        $result = & $builder -AppName Fixture -Version 26.05 -Revision 90 -ValidateOnly
+        $result = & $builder -AppName Fixture -Version 26.05 -Revision 90 -ValidateOnly -InformationVariable validationMessages
         Assert-True ($result.Status -eq 'ConfigurationValid' -and -not (Test-Path "$fixtureRoot/output/Fixture/26.05/rev-90")) 'Validation wrote output.'
+        Assert-True (@($validationMessages | Where-Object { $_.MessageData.ToString() -like '& *' }).Count -eq 0) 'Validation printed next-step commands.'
         $parameters = (Get-Command $builder).Parameters
         Assert-True (-not $parameters.ContainsKey('CreateIntuneWin') -and -not $parameters.ContainsKey('IntuneWinToolPath')) 'Builder still offers integrated packaging.'
         $metadata = Get-Content "$($built.OutputPath)/build.json" -Raw | ConvertFrom-Json
@@ -463,12 +493,21 @@ try {
     Test-Case 'Existing revisions require Force and new revisions preserve inputs and previous output' {
         $before = Get-TreeSnapshot $built.OutputPath
         $inputHash = (Get-FileHash "$fixtureRoot/apps/Fixture/26.05/app.json").Hash
-        Assert-Throws { & $builder -AppName Fixture -Version 26.05 } 'Output already exists'
-        $next = & $builder -AppName Fixture -Version 26.05 -Revision 02
+        $failedMessages = @()
+        $buildFailure = $null
+        try { $null = & $builder -AppName Fixture -Version 26.05 -InformationVariable failedMessages }
+        catch { $buildFailure = $_ }
+        Assert-True ($buildFailure -and $buildFailure.Exception.Message -match 'Output already exists') 'Existing output did not fail as expected.'
+        Assert-True (@($failedMessages | Where-Object { $_.MessageData.ToString() -like '& *' }).Count -eq 0) 'Failed build printed next steps.'
+        $next = & $builder -AppName Fixture -Version 26.05 -Revision 02 -InformationVariable nextMessages
+        Assert-True ($next -is [pscustomobject]) 'Explicit revision build changed the result type.'
+        Assert-BuildNextCommands $nextMessages '02' $fixtureRoot
         Assert-True ((Get-TreeSnapshot $built.OutputPath) -ceq $before) 'New revision changed prior output.'
         Assert-True ((Get-FileHash "$fixtureRoot/apps/Fixture/26.05/app.json").Hash -eq $inputHash) 'Revision override changed source JSON.'
         Assert-True ((Get-Content "$($next.OutputPath)/app.json" -Raw | ConvertFrom-Json).revision -eq '02') 'Revision override missing from snapshot.'
-        $null = & $builder -AppName Fixture -Version 26.05 -Force
+        $forced = & $builder -AppName Fixture -Version 26.05 -Force -InformationVariable forcedMessages
+        Assert-True ($forced -is [pscustomobject]) 'Forced build changed the result type.'
+        Assert-BuildNextCommands $forcedMessages '01' $fixtureRoot
         Assert-True ((Get-TreeSnapshot $built.OutputPath) -ceq $before) 'Repeated generation changed identical output.'
     }
     Test-Case 'Missing payloads and failed rendering preserve prior output and clean staging' {

@@ -2,6 +2,10 @@
 <#
 .SYNOPSIS
 Validate one application version or build its standalone PSADT 4.1.8 package.
+.DESCRIPTION
+After a successful build, prints commands to package, optionally preview, and upload the resolved revision.
+Commands use absolute script paths and are not executed. Replace <tenant-guid> before live upload.
+Upload and preview require PowerShell 7.2 or later. The build result remains a pipeline object.
 .PARAMETER ValidateOnly
 Validate JSON and paths without requiring installers or a staged toolkit. No output is created.
 #>
@@ -161,4 +165,13 @@ finally {
 Write-Host "Built: $(Join-Path $target 'Package')"
 Write-Host "Install:   $installCommand"
 Write-Host "Uninstall: $uninstallCommand"
+$selection = "-AppName '{0}' -Version '{1}' -Revision '{2}'" -f $AppName.Replace("'", "''"), $Version.Replace("'", "''"), $config.revision.Replace("'", "''")
+$packageScript = (Join-Path $PSScriptRoot 'New-IntuneWin.ps1').Replace("'", "''")
+$uploadScript = (Join-Path $PSScriptRoot 'Upload-IntuneWin.ps1').Replace("'", "''")
+Write-Host 'Review the generated deployment before packaging, then run:'
+Write-Host "& '$packageScript' $selection"
+Write-Host 'Optional local upload preview (PowerShell 7.2 or later):'
+Write-Host "& '$uploadScript' $selection -Preview -AsJson"
+Write-Host 'Live upload (PowerShell 7.2 or later): replace <tenant-guid> with your tenant ID.'
+Write-Host "& '$uploadScript' $selection -TenantId '<tenant-guid>'"
 return [pscustomobject]@{ Status = 'Built'; AppName = $AppName; Version = $Version; Revision = $config.revision; OutputPath = $target; PackagePath = (Join-Path $target 'Package'); InstallCommand = $installCommand; UninstallCommand = $uninstallCommand; RepairCommand = 'Invoke-AppDeployToolkit.exe -DeploymentType Repair' }
