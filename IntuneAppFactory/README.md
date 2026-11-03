@@ -123,15 +123,14 @@ All of these fields belong in `psadt`. Only `closeProcessesCountdown` is optiona
 | Field | Meaning |
 | --- | --- |
 | `processesToClose` | Array of objects with required `name` and `description`. Use `[]` for none. Names omit `.exe`; duplicate names are rejected without regard to case. |
-| `closeProcesses` | Boolean controlling whether configured processes are passed to the welcome dialog for install, uninstall, and repair. |
-| `closeProcessesCountdown` | Optional integer from 0 through 86400 seconds for all three actions when process closing is enabled. Omit the field to leave `CloseProcessesCountdown` out of install, uninstall, and repair. A supplied value, including `0`, is passed unchanged; `null` is invalid. |
+| `closeProcessesCountdown` | Optional integer from 0 through 86400 seconds for all three actions when there are processes to close. Omit the field to leave `CloseProcessesCountdown` out of install, uninstall, and repair. A supplied value, including `0`, is passed unchanged; `null` is invalid. |
 | `allowDefer`, `deferTimes` | Deferrals apply only to interactive installation. Uninstall and repair never defer. Keep both fields present when disabled. |
 | `checkDiskSpace`, `persistPrompt` | Booleans for the original install welcome block. |
 | `suppressRebootPassThru`, `terminalServerMode`, `disableLogging` | Explicit booleans mapped to native session options. |
 | `scriptAuthor`, `scriptVersion`, `scriptDate` | Script metadata. Version uses dotted numeric notation; date is `yyyy-MM-dd`. |
 | `successExitCodes`, `rebootExitCodes` | Nonempty arrays of 32-bit integer codes, mapped to the native session. |
 | `installName`, `installTitle` | Explicit title overrides. Use `""` to let PSADT derive them. |
-| `completionPrompt` | Object requiring `enabled`, `message`, `buttonRightText`, and `noWait`. Retains the original post-install prompt section. |
+| `completionPrompt` | Object requiring `message`, `buttonRightText`, and `noWait`. Retains the original post-install prompt condition, `if (!$adtSession.UseDefaultMsi)`. |
 
 ```json
 "processesToClose": [
@@ -140,7 +139,11 @@ All of these fields belong in `psadt`. Only `closeProcessesCountdown` is optiona
 ]
 ```
 
-Countdown and deferral counts accept integers from 0 to 86400; enabled deferrals require a positive count. Prompt `enabled` and `noWait` are booleans. The message may be empty only when disabled; the button text must be nonempty. Toolkit dialog behavior still follows the effective deployment mode.
+Countdown and deferral counts accept integers from 0 to 86400; enabled deferrals require a positive count. Prompt `noWait` is a boolean. The message and button text must be nonempty. Toolkit dialog behavior still follows the effective deployment mode.
+
+The generator preserves the original process condition, `if ($adtSession.AppProcessesToClose.Count -gt 0)`, for install, uninstall, and repair. Use `processesToClose: []` when no processes should be supplied. No Boolean prefixes are added to these conditions or the completion-prompt condition.
+
+When migrating existing configurations, remove `psadt.closeProcesses` and `psadt.completionPrompt.enabled`; both are now rejected as unknown properties. Previously disabled process handling now follows the process list, and the completion-prompt call follows `UseDefaultMsi`. Existing generated packages retain their old behavior until rebuilt.
 
 Deployment mode is supplied exclusively on the launcher command line; `psadt.deployMode` is not accepted in JSON. The generator does not supply or override it. If omitted on the command line, the original toolkit's native default handling applies. PSADT may adjust the effective mode for the target session.
 

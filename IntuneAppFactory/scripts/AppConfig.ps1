@@ -126,9 +126,9 @@ function Read-FactoryConfig {
     }
 
     $options = $config.psadt
-    $optionKeys = @('processesToClose','closeProcesses','closeProcessesCountdown','allowDefer','deferTimes','checkDiskSpace','persistPrompt','suppressRebootPassThru','terminalServerMode','disableLogging','scriptAuthor','scriptVersion','scriptDate','successExitCodes','rebootExitCodes','installName','installTitle','completionPrompt')
+    $optionKeys = @('processesToClose','closeProcessesCountdown','allowDefer','deferTimes','checkDiskSpace','persistPrompt','suppressRebootPassThru','terminalServerMode','disableLogging','scriptAuthor','scriptVersion','scriptDate','successExitCodes','rebootExitCodes','installName','installTitle','completionPrompt')
     Assert-FactoryObject $options $optionKeys 'app.psadt' -Required @($optionKeys | Where-Object { $_ -ne 'closeProcessesCountdown' })
-    foreach ($field in @('closeProcesses','allowDefer','checkDiskSpace','persistPrompt','suppressRebootPassThru','terminalServerMode','disableLogging')) {
+    foreach ($field in @('allowDefer','checkDiskSpace','persistPrompt','suppressRebootPassThru','terminalServerMode','disableLogging')) {
         if ($options.$field -isnot [bool]) { throw "app.psadt.$field must be a JSON boolean." }
     }
     foreach ($field in @('deferTimes','closeProcessesCountdown')) {
@@ -161,11 +161,9 @@ function Read-FactoryConfig {
         $names += $process.name
     }
     $prompt = $options.completionPrompt
-    Assert-FactoryObject $prompt @('enabled','message','buttonRightText','noWait') 'app.psadt.completionPrompt'
-    foreach ($field in @('enabled','noWait')) {
-        if ($prompt.$field -isnot [bool]) { throw "app.psadt.completionPrompt.$field must be a JSON boolean." }
-    }
-    Assert-FactoryText $prompt.message 'app.psadt.completionPrompt.message' -AllowEmpty:(-not $prompt.enabled)
+    Assert-FactoryObject $prompt @('message','buttonRightText','noWait') 'app.psadt.completionPrompt'
+    if ($prompt.noWait -isnot [bool]) { throw 'app.psadt.completionPrompt.noWait must be a JSON boolean.' }
+    Assert-FactoryText $prompt.message 'app.psadt.completionPrompt.message'
     Assert-FactoryText $prompt.buttonRightText 'app.psadt.completionPrompt.buttonRightText'
 
     Assert-FactoryObject $config.intune @('displayName','description','installContext','detection','icon','informationUrl','upload','displayVersion','developer','owner','privacyInformationUrl','notes','isFeatured','allowAvailableUninstall','categoryIds','roleScopeTagIds') 'app.intune' @('displayName','description','installContext','detection','icon')

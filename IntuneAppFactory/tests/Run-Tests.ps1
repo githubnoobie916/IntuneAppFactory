@@ -95,7 +95,31 @@ try {
             Assert-Throws { Read-FactoryConfig $configPath } 'upload|Registry|informationUrl'
         }
     }
-    Test-Case 'Required root and deployment settings are enforced even when disabled' {
+    Test-Case 'Removed process and completion toggles are rejected instead of ignored' {
+        foreach ($value in @($false, $true)) {
+            $config = New-TestConfig
+            $config.psadt | Add-Member closeProcesses $value
+            Save-TestConfig $config
+            Assert-Throws { Read-FactoryConfig $configPath } 'Unknown property.*psadt.closeProcesses'
+            $config = New-TestConfig
+            $config.psadt.completionPrompt | Add-Member enabled $value
+            Save-TestConfig $config
+            Assert-Throws { Read-FactoryConfig $configPath } 'Unknown property.*completionPrompt.enabled'
+        }
+    }
+    Test-Case 'Completion prompt requires nonempty text and Boolean noWait' {
+        foreach ($field in @('message','buttonRightText')) {
+            $config = New-TestConfig
+            $config.psadt.completionPrompt.$field = ''
+            Save-TestConfig $config
+            Assert-Throws { Read-FactoryConfig $configPath } "completionPrompt.$field"
+        }
+        $config = New-TestConfig
+        $config.psadt.completionPrompt.noWait = 'true'
+        Save-TestConfig $config
+        Assert-Throws { Read-FactoryConfig $configPath } 'completionPrompt.noWait must be a JSON boolean'
+    }
+    Test-Case 'Required root and deployment settings are enforced' {
         foreach ($section in @('root','psadt','completionPrompt','intune')) {
             $original = New-TestConfig
             $settings = switch ($section) { root { $original }; psadt { $original.psadt }; completionPrompt { $original.psadt.completionPrompt }; intune { $original.intune } }
@@ -171,6 +195,8 @@ try {
         $config.repair = @([pscustomobject]@{type='EXE';path='repair.exe';arguments='/repair /quiet'})
         Update-FactoryDeploymentTemplate -Path $entry -Config $config
         $generated = Get-Content $entry -Raw
+        Assert-True ([regex]::Matches($generated, [regex]::Escape('if ($adtSession.AppProcessesToClose.Count -gt 0)')).Count -eq 3) 'Install, uninstall and repair must retain the original process conditions without Boolean prefixes.'
+        Assert-True ($generated.Contains('if (!$adtSession.UseDefaultMsi)')) 'The completion prompt must retain the original MSI condition without a Boolean prefix.'
         Assert-True ($generated.Contains('Start-ADTMsiProcess -Action Install') -and $generated.Contains('Start-ADTMsiProcess -Action Uninstall') -and $generated.Contains("'repair.exe'")) 'Direct action commands missing.'
         Assert-True ($generated -notmatch 'Invoke-Factory|Read-Factory|SupportFiles[/\\]Factory|app\.json|\{\{AppName\}\}') 'Generated script has factory runtime dependencies.'
         Assert-True ((Get-FileHash $source).Hash -eq $sourceHash) 'Original template changed.'
@@ -265,7 +291,9 @@ try {
             Assert-True ($state.Opened.AppName -eq '7-Zip' -and -not $state.Opened.ContainsKey('DeployMode')) 'Metadata missing or generator supplied a deployment mode.'
             Assert-True ($state.Calls[0].FilePath.StartsWith($detached)) 'Detached package used a repository path.'
             Assert-True ($state.Imports.Count -eq 2 -and $state.Imports[0].StartsWith($detached)) 'Local module/extension imports were lost.'
-            Assert-True ($state.Prompts.Count -eq 0) 'Disabled completion prompt was displayed.'
+            $expectedPrompts = if ($action -eq 'Install') { 1 } else { 0 }
+            Assert-True ($state.Prompts.Count -eq $expectedPrompts) 'Completion prompt must run only after installation.'
+            Assert-True ($state.Welcome.Count -eq 1 -and $state.Welcome[0].CloseProcesses.Count -eq 1) "$action must pass the configured processes to the welcome dialog."
         }
         $failed = Invoke-DeploymentProbe $detached @{DeploymentType='Install'} -FailProcess
         Assert-True ($failed.Calls.Count -eq 1 -and $failed.ExitCodes[0] -eq 60001 -and $failed.Errors.Count -eq 1) 'Failed step did not stop deployment and use native error handling.'
@@ -279,7 +307,6 @@ try {
     Test-Case 'Described processes, deferrals and completion prompt use JSON and CLI overrides' {
         $config = New-TestConfig
         $config.psadt.processesToClose += [pscustomobject]@{name='7zG';description='7-Zip GUI'}
-        $config.psadt.closeProcesses = $true
         $config.psadt.closeProcessesCountdown = 123
         $config.psadt.allowDefer = $true
         $config.psadt.deferTimes = 7
@@ -288,7 +315,6 @@ try {
         $config.psadt.disableLogging = $true
         $config.psadt.checkDiskSpace = $false
         $config.psadt.persistPrompt = $false
-        $config.psadt.completionPrompt.enabled = $true
         $config.psadt.completionPrompt.message = "Installation's complete."
         $config.psadt.completionPrompt.noWait = $false
         Copy-Item "$pristineRoot/Invoke-AppDeployToolkit.ps1" "$detached/Invoke-AppDeployToolkit.ps1" -Force
@@ -314,7 +340,6 @@ try {
         Test-Case "Process countdown distinguishes omission from explicit zero (present: $countdownPresent)" {
             . "$projectRoot/scripts/Update-DeploymentTemplate.ps1"
             $config = New-TestConfig
-            $config.psadt.closeProcesses = $true
             if ($countdownPresent) { $config.psadt.closeProcessesCountdown = 0 }
             else { $config.psadt.PSObject.Properties.Remove('closeProcessesCountdown') }
             $entry = Join-Path $detached 'Invoke-AppDeployToolkit.ps1'
@@ -379,7 +404,7 @@ try {
         }
         $config = New-TestConfig; $config.install[0] | Add-Member productCode '{12345678-1234-1234-1234-123456789012}'; Save-TestConfig $config
         Assert-Throws { Read-FactoryConfig $configPath } 'exactly one'
-        $config = New-TestConfig; $config.psadt.closeProcesses = 'false'; Save-TestConfig $config
+        $config = New-TestConfig; $config.psadt.allowDefer = 'false'; Save-TestConfig $config
         Assert-Throws { Read-FactoryConfig $configPath } 'JSON boolean'
         $config = New-TestConfig; $config.install[0].arguments = ''; Save-TestConfig $config
         Assert-Throws { Read-FactoryConfig $configPath } 'arguments'
@@ -393,8 +418,23 @@ try {
         $config.intune.installContext = 'user'
         Copy-Item "$pristineRoot/Invoke-AppDeployToolkit.ps1" "$detached/Invoke-AppDeployToolkit.ps1" -Force
         Update-FactoryDeploymentTemplate "$detached/Invoke-AppDeployToolkit.ps1" $config
-        $state = Invoke-DeploymentProbe $detached @{DeploymentType='Repair'}
-        Assert-True ($state.ExitCodes[0] -eq 0 -and $state.Calls.Count -eq 0 -and $state.Welcome.Count -eq 0 -and -not $state.Opened.RequireAdmin) 'Empty repair or user context was not respected.'
+        foreach ($action in @('Install','Uninstall','Repair')) {
+            $state = Invoke-DeploymentProbe $detached @{DeploymentType=$action}
+            Assert-True ($state.ExitCodes[0] -eq 0 -and -not $state.Opened.RequireAdmin) "$action failed or user context was not respected."
+            if ($action -eq 'Install') {
+                Assert-True ($state.Welcome.Count -eq 1 -and -not $state.Welcome[0].ContainsKey('CloseProcesses')) 'An empty process list must leave the install welcome dialog without CloseProcesses.'
+            }
+            else { Assert-True ($state.Welcome.Count -eq 0) "$action must skip the process welcome dialog for an empty process list." }
+            if ($action -eq 'Repair') { Assert-True ($state.Calls.Count -eq 0) 'Empty repair list ran an installer.' }
+        }
+    }
+    Test-Case 'Completion prompt follows the native UseDefaultMsi condition' {
+        foreach ($useDefaultMsi in @($false, $true)) {
+            $state = Invoke-DeploymentProbe $detached @{DeploymentType='Install'} -UseDefaultMsi:$useDefaultMsi
+            Assert-True ($state.ExitCodes[0] -eq 0) 'Installation failed before the completion prompt condition.'
+            $expectedPrompts = if ($useDefaultMsi) { 0 } else { 1 }
+            Assert-True ($state.Prompts.Count -eq $expectedPrompts) 'Completion prompt did not follow UseDefaultMsi.'
+        }
     }
     Test-Case 'Generated native command parameters exist in the bundled toolkit version' {
         $tokens=$null; $errors=$null

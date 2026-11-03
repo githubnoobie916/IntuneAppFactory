@@ -79,8 +79,6 @@ function Update-FactoryDeploymentTemplate {
     foreach ($setting in @('DeferTimes','CheckDiskSpace','PersistPrompt')) {
         Add-TemplateEdit ("(?m)^        $setting = [^\r\n]+") ("        $setting = " + (ConvertTo-FactoryPowerShellLiteral $options.$setting))
     }
-    $close = ConvertTo-FactoryPowerShellLiteral $options.closeProcesses
-    Add-TemplateEdit ([regex]::Escape('if ($adtSession.AppProcessesToClose.Count -gt 0)')) ('if (' + $close + ' -and $adtSession.AppProcessesToClose.Count -gt 0)') 3
     $countdownArgument = ''
     if ('closeProcessesCountdown' -in $options.PSObject.Properties.Name) {
         $addProcesses = "        `$saiwParams.Add('CloseProcesses', `$adtSession.AppProcessesToClose)"
@@ -89,7 +87,6 @@ function Update-FactoryDeploymentTemplate {
     }
     Add-TemplateEdit '(?m) -CloseProcessesCountdown 60(?=\r?$)' $countdownArgument 2
     $prompt = $options.completionPrompt
-    Add-TemplateEdit ([regex]::Escape('if (!$adtSession.UseDefaultMsi)')) ('if (' + (ConvertTo-FactoryPowerShellLiteral $prompt.enabled) + ' -and !$adtSession.UseDefaultMsi)')
     $promptCommand = '        Show-ADTInstallationPrompt -Message ' + (ConvertTo-FactoryPowerShellLiteral $prompt.message) + ' -ButtonRightText ' + (ConvertTo-FactoryPowerShellLiteral $prompt.buttonRightText) + ' -NoWait:' + (ConvertTo-FactoryPowerShellLiteral $prompt.noWait)
     Add-TemplateEdit '(?m)^        Show-ADTInstallationPrompt -Message [^\r\n]+' $promptCommand
     # Native command-line switches take priority over the generated JSON values.

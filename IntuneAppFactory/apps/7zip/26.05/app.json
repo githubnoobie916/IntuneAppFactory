@@ -15,7 +15,6 @@
   "additionalFiles": [],
   "psadt": {
     "processesToClose": [{ "name": "7zFM", "description": "7-Zip File Manager" }],
-    "closeProcesses": false,
     "closeProcessesCountdown": 60,
     "allowDefer": false,
     "deferTimes": 3,
@@ -32,7 +31,6 @@
     "installName": "",
     "installTitle": "",
     "completionPrompt": {
-      "enabled": false,
       "message": "7-Zip installation completed.",
       "buttonRightText": "OK",
       "noWait": true

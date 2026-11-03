@@ -1,9 +1,9 @@
 #requires -Version 5.1
 # Test-only boundary mocks. The generated entry script runs, but no toolkit module,
 # installer, process-closing operation, or UI is executed.
-function Invoke-DeploymentProbe($PackageRoot, [hashtable]$Parameters = @{}, [switch]$FailProcess) {
+function Invoke-DeploymentProbe($PackageRoot, [hashtable]$Parameters = @{}, [switch]$FailProcess, [switch]$UseDefaultMsi) {
     $state = [pscustomobject]@{
-        Package=$PackageRoot; Opened=$null; Session=$null; FailProcess=[bool]$FailProcess
+        Package=$PackageRoot; Opened=$null; Session=$null; FailProcess=[bool]$FailProcess; UseDefaultMsi=[bool]$UseDefaultMsi
         Calls=(New-Object 'System.Collections.Generic.List[object]')
         Welcome=(New-Object 'System.Collections.Generic.List[object]')
         Prompts=(New-Object 'System.Collections.Generic.List[object]')
@@ -40,7 +40,7 @@ function Invoke-DeploymentProbe($PackageRoot, [hashtable]$Parameters = @{}, [swi
                 $RequireAdmin,$InstallName,$InstallTitle,$DeployAppScriptFriendlyName,$DeployAppScriptVersion,$DeployAppScriptParameters,
                 $DeploymentType='Install',$DeployMode,[switch]$SuppressRebootPassThru,[switch]$TerminalServerMode,[switch]$DisableLogging,[switch]$PassThru)
             $script:state.Opened = $PSBoundParameters
-            $script:state.Session = [pscustomobject]@{DeploymentType=$DeploymentType;DeployMode=$DeployMode;DirFiles=(Join-Path $script:state.Package 'Files');AppProcessesToClose=@($AppProcessesToClose);UseDefaultMsi=$false;InstallPhase=''}
+            $script:state.Session = [pscustomobject]@{DeploymentType=$DeploymentType;DeployMode=$DeployMode;DirFiles=(Join-Path $script:state.Package 'Files');AppProcessesToClose=@($AppProcessesToClose | Where-Object { $null -ne $_ });UseDefaultMsi=$script:state.UseDefaultMsi;DefaultMsiFile='fixture.msi';DefaultMstFile=$null;DefaultMspFiles=@();InstallPhase=''}
             return $script:state.Session
         }
         function Close-ADTSession { param([int]$ExitCode=0) $script:state.ExitCodes.Add($ExitCode) }
@@ -49,7 +49,7 @@ function Invoke-DeploymentProbe($PackageRoot, [hashtable]$Parameters = @{}, [swi
         function Show-ADTInstallationProgress { }
         function Show-ADTInstallationWelcome {
             [CmdletBinding()]
-            param($CloseProcesses,$CloseProcessesCountdown,[switch]$AllowDefer,$DeferTimes,[switch]$CheckDiskSpace,[switch]$PersistPrompt)
+            param($CloseProcesses,$CloseProcessesCountdown,[switch]$AllowDefer,$DeferTimes,$DeferRunInterval,[switch]$CheckDiskSpace,[switch]$PersistPrompt)
             $script:state.Welcome.Add($PSBoundParameters)
         }
         function Show-ADTInstallationPrompt {

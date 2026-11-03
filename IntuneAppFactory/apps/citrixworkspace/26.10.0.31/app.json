@@ -36,7 +36,6 @@
         "description": "Citrix Service"
       }
     ],
-    "closeProcesses": false,
     "allowDefer": true,
     "deferTimes": 3,
     "checkDiskSpace": true,
@@ -52,7 +51,6 @@
     "installName": "Citrix Workspace",
     "installTitle": "Citrix Workspace",
     "completionPrompt": {
-      "enabled": true,
       "message": "Citrix Workspace installation completed.",
       "buttonRightText": "OK",
       "noWait": true

@@ -38,7 +38,6 @@
         "description": "GlobalProtect Client"
       }
     ],
-    "closeProcesses": false,
     "closeProcessesCountdown": 60,
     "allowDefer": true,
     "deferTimes": 3,
@@ -61,7 +60,6 @@
     "installName": "GlobalProtect VPN",
     "installTitle": "GlobalProtect VPN",
     "completionPrompt": {
-      "enabled": true,
       "message": "GlobalProtect VPN installation completed.",
       "buttonRightText": "OK",
       "noWait": true
