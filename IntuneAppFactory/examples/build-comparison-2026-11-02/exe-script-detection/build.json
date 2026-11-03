@@ -1,0 +1,29 @@
+{
+  "factory": "IntuneAppFactory",
+  "appName": "notepadplusplus",
+  "version": "8.9.7",
+  "revision": "01",
+  "toolkitVersion": "4.1.8",
+  "packageDirectory": "Package",
+  "installCommand": "Invoke-AppDeployToolkit.exe -DeploymentType Install",
+  "uninstallCommand": "Invoke-AppDeployToolkit.exe -DeploymentType Uninstall",
+  "repairCommand": "Invoke-AppDeployToolkit.exe -DeploymentType Repair",
+  "icon": null,
+  "intune": {
+    "displayName": "Notepad++ 8.9.7 (x64)",
+    "description": "Notepad++ is a free source code editor and Notepad replacement.",
+    "informationUrl": "https://notepad-plus-plus.org/downloads/v8.9.7/",
+    "installContext": "system",
+    "icon": "",
+    "detection": {
+      "type": "powershell",
+      "scriptPath": "detection/Detect-NotepadPlusPlus.ps1",
+      "runAs32Bit": false,
+      "enforceSignatureCheck": false
+    }
+  },
+  "detectionScript": {
+    "path": "Detection/Detect.ps1",
+    "sha256": "A88691DB3F324A2D5761184744CA5E10BC1503915E20CC6C8F7D3769F779C2C3"
+  }
+}

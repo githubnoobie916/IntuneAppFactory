@@ -1,0 +1,84 @@
+diff --git source/Invoke-AppDeployToolkit.ps1 exe-script-detection/Invoke-AppDeployToolkit.ps1
+index eec61c8..7fdb883 100644
+--- source/Invoke-AppDeployToolkit.ps1
++++ exe-script-detection/Invoke-AppDeployToolkit.ps1
+@@ -88,18 +88,18 @@ param
+ # By setting the "AppName" property, Zero-Config MSI will be disabled.
+ $adtSession = @{
+     # App variables.
+-    AppVendor = ''
+-    AppName = ''
+-    AppVersion = ''
+-    AppArch = ''
++    AppVendor = 'Notepad++ Team'
++    AppName = 'Notepad++'
++    AppVersion = '8.9.7'
++    AppArch = 'x64'
+     AppLang = 'EN'
+     AppRevision = '01'
+     AppSuccessExitCodes = @(0)
+     AppRebootExitCodes = @(1641, 3010)
+     AppProcessesToClose = @()  # Example: @('excel', @{ Name = 'winword'; Description = 'Microsoft Word' })
+     AppScriptVersion = '1.0.0'
+-    AppScriptDate = '2026-01-14'
+-    AppScriptAuthor = '<author name>'
++    AppScriptDate = '2026-11-01'
++    AppScriptAuthor = 'IntuneAppFactory'
+     RequireAdmin = $true
+ 
+     # Install Titles (Only set here to override defaults set by the toolkit).
+@@ -126,7 +126,7 @@ function Install-ADTDeployment
+ 
+     ## Show Welcome Message, close processes if specified, allow up to 3 deferrals, verify there is enough disk space to complete the install, and persist the prompt.
+     $saiwParams = @{
+-        AllowDefer = $true
++        AllowDefer = $false
+         DeferTimes = 3
+         CheckDiskSpace = $true
+         PersistPrompt = $true
+@@ -135,6 +135,7 @@ function Install-ADTDeployment
+     if ($adtSession.AppProcessesToClose.Count -gt 0)
+     {
+         $saiwParams.Add('CloseProcesses', $adtSession.AppProcessesToClose)
++        $saiwParams.Add('CloseProcessesCountdown', 60)
+     }
+     Show-ADTInstallationWelcome @saiwParams
+ 
+@@ -165,6 +166,8 @@ function Install-ADTDeployment
+     }
+ 
+     ## <Perform Installation tasks here>
++    $installerPath = Join-Path $adtSession.DirFiles 'npp.8.9.7.Installer.x64.exe'
++    Start-ADTProcess -FilePath $installerPath -ArgumentList '/S' -WorkingDirectory (Split-Path $installerPath -Parent) -ExitOnProcessFailure -ErrorAction Stop
+ 
+ 
+     ##================================================
+@@ -178,7 +181,7 @@ function Install-ADTDeployment
+     ## Display a message at the end of the install.
+     if (!$adtSession.UseDefaultMsi)
+     {
+-        Show-ADTInstallationPrompt -Message 'You can customize text to appear at the end of an install or remove it completely for unattended installations.' -ButtonRightText 'OK' -NoWait
++        Show-ADTInstallationPrompt -Message 'Notepad++ installation completed.' -ButtonRightText 'OK' -NoWait:$true
+     }
+ }
+ 
+@@ -223,6 +226,9 @@ function Uninstall-ADTDeployment
+     }
+ 
+     ## <Perform Uninstallation tasks here>
++    $installerPath = [Environment]::ExpandEnvironmentVariables('%ProgramFiles%\Notepad++\uninstall.exe')
++    if ($installerPath -match '%[^%]+%' -or -not [IO.Path]::IsPathRooted($installerPath)) { throw "Unresolved executable path: $installerPath" }
++    Start-ADTProcess -FilePath $installerPath -ArgumentList '/S' -WorkingDirectory (Split-Path $installerPath -Parent) -ExitOnProcessFailure -ErrorAction Stop
+ 
+ 
+     ##================================================
+@@ -310,6 +316,9 @@ try
+ 
+     # Open a new deployment session, replacing $adtSession with a DeploymentSession.
+     $iadtParams = Get-ADTBoundParametersAndDefaultValues -Invocation $MyInvocation
++    if (-not $PSBoundParameters.ContainsKey('SuppressRebootPassThru')) { $iadtParams['SuppressRebootPassThru'] = $false }
++    if (-not $PSBoundParameters.ContainsKey('TerminalServerMode')) { $iadtParams['TerminalServerMode'] = $false }
++    if (-not $PSBoundParameters.ContainsKey('DisableLogging')) { $iadtParams['DisableLogging'] = $false }
+     $adtSession = Remove-ADTHashtableNullOrEmptyValues -Hashtable $adtSession
+     $adtSession = Open-ADTSession @adtSession @iadtParams -PassThru
+ }

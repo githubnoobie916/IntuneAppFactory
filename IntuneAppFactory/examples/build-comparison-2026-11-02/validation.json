@@ -1,0 +1,76 @@
+[
+  {
+    "App": "7-Zip",
+    "InstallerType": "MSI",
+    "DetectionType": "file",
+    "Output": "IntuneAppFactory/output/7zip/26.05/rev-06",
+    "SourceSHA256": "051248399A1980A865D3DD17AA181F13170178AA6B7B5B5B1792C61C37593EBA",
+    "GeneratedSHA256": "C90B030E9D592BCA9C06AF1BFB58BCBBAC7A27F04D3065FC05C4E9B71C0DF9B2",
+    "InstallerSHA256": "3FE4AB99FA15629C652944309A2B2BC6E41FC933FC6B63F5DF1EBCF3AEA68263",
+    "DetectionSHA256": null,
+    "OtherTemplateFilesUnchanged": 221,
+    "SyntaxValid": true,
+    "OriginalConditionsPreserved": true,
+    "LauncherParametersAndCommentsPreserved": true,
+    "Actions": [
+      {
+        "Action": "Install",
+        "InstallerCalls": 1,
+        "WelcomeCalls": 1,
+        "CompletionPrompts": 1,
+        "ExitCode": 0
+      },
+      {
+        "Action": "Uninstall",
+        "InstallerCalls": 1,
+        "WelcomeCalls": 1,
+        "CompletionPrompts": 0,
+        "ExitCode": 0
+      },
+      {
+        "Action": "Repair",
+        "InstallerCalls": 0,
+        "WelcomeCalls": 1,
+        "CompletionPrompts": 0,
+        "ExitCode": 0
+      }
+    ]
+  },
+  {
+    "App": "Notepad++",
+    "InstallerType": "EXE",
+    "DetectionType": "powershell",
+    "Output": "IntuneAppFactory/output/notepadplusplus/8.9.7/rev-01",
+    "SourceSHA256": "051248399A1980A865D3DD17AA181F13170178AA6B7B5B5B1792C61C37593EBA",
+    "GeneratedSHA256": "7758EF43471E8FC5DB4A5E028A7FBCF45582D91D72C03153D12A4C48F7821DE9",
+    "InstallerSHA256": "1884E093BAE261C4942210334E1F2EAE71354913E4DED3CC1A4A18C5320741EC",
+    "DetectionSHA256": "A88691DB3F324A2D5761184744CA5E10BC1503915E20CC6C8F7D3769F779C2C3",
+    "OtherTemplateFilesUnchanged": 221,
+    "SyntaxValid": true,
+    "OriginalConditionsPreserved": true,
+    "LauncherParametersAndCommentsPreserved": true,
+    "Actions": [
+      {
+        "Action": "Install",
+        "InstallerCalls": 1,
+        "WelcomeCalls": 1,
+        "CompletionPrompts": 1,
+        "ExitCode": 0
+      },
+      {
+        "Action": "Uninstall",
+        "InstallerCalls": 1,
+        "WelcomeCalls": 0,
+        "CompletionPrompts": 0,
+        "ExitCode": 0
+      },
+      {
+        "Action": "Repair",
+        "InstallerCalls": 0,
+        "WelcomeCalls": 0,
+        "CompletionPrompts": 0,
+        "ExitCode": 0
+      }
+    ]
+  }
+]

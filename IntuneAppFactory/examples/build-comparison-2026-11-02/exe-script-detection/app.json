@@ -1,0 +1,66 @@
+{
+  "name": "Notepad++",
+  "publisher": "Notepad++ Team",
+  "version": "8.9.7",
+  "architecture": "x64",
+  "language": "EN",
+  "revision": "01",
+  "install": [
+    {
+      "type": "EXE",
+      "path": "npp.8.9.7.Installer.x64.exe",
+      "arguments": "/S"
+    }
+  ],
+  "uninstall": [
+    {
+      "type": "EXE",
+      "executable": "%ProgramFiles%\\Notepad++\\uninstall.exe",
+      "arguments": "/S"
+    }
+  ],
+  "repair": [],
+  "additionalFiles": [],
+  "psadt": {
+    "processesToClose": [],
+    "closeProcessesCountdown": 60,
+    "allowDefer": false,
+    "deferTimes": 3,
+    "checkDiskSpace": true,
+    "persistPrompt": true,
+    "suppressRebootPassThru": false,
+    "terminalServerMode": false,
+    "disableLogging": false,
+    "scriptAuthor": "IntuneAppFactory",
+    "scriptVersion": "1.0.0",
+    "scriptDate": "2026-11-01",
+    "successExitCodes": [
+      0
+    ],
+    "rebootExitCodes": [
+      1641,
+      3010
+    ],
+    "installName": "",
+    "installTitle": "",
+    "completionPrompt": {
+      "message": "Notepad++ installation completed.",
+      "buttonRightText": "OK",
+      "noWait": true
+    }
+  },
+  "intune": {
+    "displayName": "Notepad++ 8.9.7 (x64)",
+    "description": "Notepad++ is a free source code editor and Notepad replacement.",
+    "informationUrl": "https://notepad-plus-plus.org/downloads/v8.9.7/",
+    "installContext": "system",
+    "icon": "",
+    "detection": {
+      "type": "powershell",
+      "scriptPath": "detection/Detect-NotepadPlusPlus.ps1",
+      "runAs32Bit": false,
+      "enforceSignatureCheck": false
+    }
+  },
+  "notes": "Saved EXE build example using the official Notepad++ 8.9.7 x64 installer and PowerShell detection of the 64-bit uninstall registry DisplayVersion (8.9.7 or later). No icon configured. Build and mocked deployment verified; installer not executed."
+}
