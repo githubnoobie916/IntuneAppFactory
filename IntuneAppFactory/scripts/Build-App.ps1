@@ -34,13 +34,19 @@ if ($ValidateOnly) {
 
 # Complete all input validation before creating output, including on forced rebuilds.
 $installerRoot = Get-FactoryPath $versionRoot 'installers'
-$payloadPaths = @(@($config.install) + @($config.uninstall) + @($config.repair) | ForEach-Object { if ($_.path) { $_.path } }) + @($config.additionalFiles)
-$payloadPaths = @($payloadPaths | Sort-Object -Unique)
-foreach ($relativePath in $payloadPaths) {
+$requiredPaths = @(@($config.install) + @($config.uninstall) + @($config.repair) | ForEach-Object { if ($_.path) { $_.path } }) + @($config.additionalFiles)
+foreach ($relativePath in @($requiredPaths | Sort-Object -Unique)) {
     $source = Get-FactoryPath $installerRoot $relativePath
     Assert-FactoryNoLinks $source
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Installer file not found: '$source'. Supply the vendor file under this version's installers directory." }
 }
+# Include the complete vendor payload, preserving paths relative to installers.
+Assert-FactoryNoLinks $installerRoot -Recurse
+$payloadPaths = @(Get-ChildItem -LiteralPath $installerRoot -Recurse -File -Force | ForEach-Object {
+    $relativePath = $_.FullName.Substring($installerRoot.Length + 1)
+    $null = Get-FactoryPath $installerRoot $relativePath
+    $relativePath
+} | Sort-Object)
 $iconPath = $null
 $detectionBytes = $null
 if ($config.intune.detection.type -eq 'powershell') {
@@ -115,7 +121,7 @@ try {
         $source = Get-FactoryPath $installerRoot $relativePath
         $destination = Get-FactoryPath (Join-Path $package 'Files') $relativePath
         New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
-        Copy-Item -LiteralPath $source -Destination $destination
+        Copy-Item -LiteralPath $source -Destination $destination -Force
     }
     foreach ($required in @('Invoke-AppDeployToolkit.exe','Invoke-AppDeployToolkit.ps1','PSAppDeployToolkit/PSAppDeployToolkit.psd1')) {
         if (-not (Test-Path -LiteralPath (Join-Path $package $required) -PathType Leaf)) { throw "Incomplete package: '$required' is missing." }

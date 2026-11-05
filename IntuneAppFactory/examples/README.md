@@ -16,7 +16,7 @@ apps/
         Detect-NotepadPlusPlus.ps1
 ```
 
-The version folder, JSON, detection script and installer placeholder folder are included. The vendor installer and icon are not bundled. Add them at the locations above before building, or set `intune.icon` to `""` to omit the icon. The README in `installers` is not packaged unless you explicitly list it in `additionalFiles`.
+The version folder, JSON, detection script and installer placeholder folder are included. The vendor installer and icon are not bundled. Add them at the locations above before building, or set `intune.icon` to `""` to omit the icon. All files under `installers` are packaged recursively, including its README; remove that placeholder README before building if it is not needed.
 
 For a different app, rename the copied app and version folders and update `app.json`: name, publisher, version (must match the version folder), architecture, installer filename and arguments, uninstall command, detection, display name, description, information URL, upload settings, and notes. Keep `"icon": "icon.png"` in every version to share the image directly under the app folder. `-AppName` is the app folder name, not necessarily the display name.
 

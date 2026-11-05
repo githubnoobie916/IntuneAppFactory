@@ -259,6 +259,14 @@ try {
         $config.repair = @([pscustomobject]@{type='EXE';path='repair.exe';arguments='/repair'})
         $config | ConvertTo-Json -Depth 20 | Set-Content "$fixtureRoot/apps/Fixture/26.05/app.json" -Encoding UTF8
         foreach ($name in @('7z2605-x64.msi','setup.exe','repair.exe')) { Set-Content "$fixtureRoot/apps/Fixture/26.05/installers/$name" 'Inert test payload; never execute.' }
+        New-Item -ItemType Directory -Path "$fixtureRoot/apps/Fixture/26.05/installers/vendor/data" -Force | Out-Null
+        foreach ($name in @('setup.ini','vendor/data/setup.ini','vendor/data/payload.cab','.hidden-config')) {
+            Set-Content -LiteralPath "$fixtureRoot/apps/Fixture/26.05/installers/$name" "Unlisted sidecar: $name"
+        }
+        if ($env:OS -eq 'Windows_NT') {
+            $hidden = Get-Item -LiteralPath "$fixtureRoot/apps/Fixture/26.05/installers/.hidden-config" -Force
+            $hidden.Attributes = $hidden.Attributes -bor [IO.FileAttributes]::Hidden
+        }
         $script:sourceConfigHash = (Get-FileHash "$fixtureRoot/apps/Fixture/26.05/app.json").Hash
         $script:installerSnapshot = Get-TreeSnapshot "$fixtureRoot/apps/Fixture/26.05/installers"
         $script:oldOutput = Join-Path $fixtureRoot 'output/Fixture/26.05/rev-01'
@@ -283,6 +291,23 @@ try {
         }
         Assert-True ($built -is [pscustomobject] -and $built.Status -eq 'Built') 'Command text leaked onto the success pipeline.'
         Assert-BuildNextCommands $buildMessages '01' $fixtureRoot
+    }
+    Test-Case 'Builder copies every installer file including unlisted nested and hidden sidecars' {
+        $installers = "$fixtureRoot/apps/Fixture/26.05/installers"
+        foreach ($file in Get-ChildItem -LiteralPath $installers -Recurse -File -Force) {
+            $relative = $file.FullName.Substring($installers.Length + 1)
+            $destination = Join-Path "$($built.PackagePath)/Files" $relative
+            Assert-True (Test-Path -LiteralPath $destination -PathType Leaf) "Installer file missing from package: $relative"
+            Assert-True ((Get-FileHash -LiteralPath $destination).Hash -eq (Get-FileHash -LiteralPath $file.FullName).Hash) "Installer file contents changed: $relative"
+        }
+    }
+    Test-Case 'Builder rejects unlisted installer junctions without replacing prior output' {
+        $before = Get-TreeSnapshot $built.OutputPath
+        $junction = "$fixtureRoot/apps/Fixture/26.05/installers/linked"
+        New-Item -ItemType Junction -Path $junction -Target $sandbox | Out-Null
+        try { Assert-Throws { & $builder -AppName Fixture -Version 26.05 -Force } 'Reparse points' }
+        finally { [IO.Directory]::Delete($junction) }
+        Assert-True ((Get-TreeSnapshot $built.OutputPath) -ceq $before) 'Rejected installer junction changed prior output.'
     }
     Test-Case 'Builder snapshots detection script bytes without executing them or including them in Package' {
         $appConfigPath = "$fixtureRoot/apps/Fixture/26.05/app.json"

@@ -50,7 +50,7 @@ Intune_App_Packaging/
           Package/
             Invoke-AppDeployToolkit.exe
             Invoke-AppDeployToolkit.ps1
-            Files/                        # referenced payloads and sidecar files
+            Files/                        # all installer files, preserving subfolders
             PSAppDeployToolkit/
             PSAppDeployToolkit.Extensions/
             Assets/, Config/, Strings/, SupportFiles/
@@ -91,7 +91,7 @@ The toolkit's own `Config/`, `Strings/`, and other resources are copied unchange
 | `name`, `publisher`, `version`, `architecture` | Application metadata. Architecture: `x86`, `x64`, or `arm64`. Version must match its directory. Nonempty `name` disables native zero-config MSI discovery. |
 | `language`, `revision` | Explicit language and revision. Revision is a string of 1–4 digits, such as `"01"`. |
 | `install`, `uninstall`, `repair` | Ordered arrays of MSI/EXE steps. Install and uninstall must be nonempty. `"repair": []` means no application repair commands; the original repair phases remain. |
-| `additionalFiles` | Explicit array of sidecar paths under `installers/`; use `[]` for none. Only referenced payloads and these files are copied. |
+| `additionalFiles` | Explicit array of required sidecar file paths under `installers/`; use `[]` for none. Listed files must exist. All files under `installers/` are copied recursively, including unlisted and hidden files, preserving subfolders. |
 | `psadt` | All deployment settings described below. |
 | `intune` | Explicit publishing metadata described below. |
 | `notes` | Maintainer text; use `""` for none. |
